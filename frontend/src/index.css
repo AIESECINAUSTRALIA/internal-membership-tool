@@ -1,0 +1,18 @@
+:root {
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color-scheme: light dark;
+  color: #08060d;
+  background: #fff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f3f4f6;
+    background: #16171d;
+  }
+}
+
+body {
+  margin: 0;
+}

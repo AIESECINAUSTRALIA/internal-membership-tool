@@ -5,27 +5,37 @@
 .env.*
 !.env.example
 *.local
+.envrc
+
+# Credential material — never commit (public certs: use `git add -f`)
+*.pem
+*.key
+*.p12
+*-service-account.json
 
 # ---------------------------------------------------------------------------
 # Python backend
+#
+# Build-artifact dirs are ANCHORED to backend/ on purpose: unanchored names
+# like lib/, var/, parts/, build/ would otherwise match anywhere and swallow
+# real source dirs (e.g. frontend/src/lib/).
 # ---------------------------------------------------------------------------
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
+/backend/build/
+/backend/develop-eggs/
+/backend/downloads/
+/backend/eggs/
+/backend/.eggs/
+/backend/lib/
+/backend/lib64/
+/backend/parts/
+/backend/sdist/
+/backend/var/
+/backend/wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -33,8 +43,6 @@ wheels/
 # Virtual environments
 .venv/
 venv/
-env/
-ENV/
 
 # Tooling / caches
 .pytest_cache/
@@ -61,32 +69,46 @@ docker-data/
 *.pid
 
 # ---------------------------------------------------------------------------
+# Docker
+# ---------------------------------------------------------------------------
+docker-compose.override.yml
+compose.override.yml
+
+# ---------------------------------------------------------------------------
 # React frontend / Node
 # ---------------------------------------------------------------------------
 node_modules/
 .pnp
 .pnp.js
 coverage/
-build/
 dist/
+dist-ssr/
 .next/
 out/
 .cache/
 .parcel-cache/
 .vite/
 .eslintcache
+*.tsbuildinfo
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
 # ---------------------------------------------------------------------------
-# Editors / OS
+# Logs
+# ---------------------------------------------------------------------------
+*.log
+
+# ---------------------------------------------------------------------------
+# Editors / OS / tooling
 # ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vscode/*
+!.vscode/extensions.json
 *.swp
 *.swo
 *~
+.claude/settings.local.json

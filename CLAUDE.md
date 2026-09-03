@@ -10,11 +10,60 @@ This file gives Claude persistent context on this project. Read it before making
 
 ## Repo state & conventions
 
-This repository is currently pre-code — the only tracked files are `README.md` (team roster: name, email, GitHub handle) and this file. There is no build system, test suite, or application code yet. When the first code lands, add build/lint/test commands and concrete architecture notes here.
+The project **skeleton** has landed (DEV-0015). The stack runs end-to-end, but no
+product features are built yet — see "Current state" below.
 
-- **Branches**: `chore/DEV-XXXX_short_description` (see the current `chore/DEV-0000_misc_setup`).
-- **Commits / PR titles**: prefixed with the ticket ID, e.g. `chore: DEV-0008 ...`. `DEV-XXXX` refers to the tracker issue.
-- Changes land on `main` via PR.
+### Stack & layout
+
+Monorepo, two sub-projects:
+
+| | Path | Stack |
+|---|---|---|
+| Backend | `backend/` | FastAPI · SQLAlchemy 2 + Alembic · Pydantic · **uv** (`uv.lock`) · Python **3.12** |
+| Frontend | `frontend/` | Vite · React · TypeScript · **npm** (`package-lock.json`) · Node **22** (`.nvmrc`) |
+| Database | — | PostgreSQL 16, via Docker Compose |
+
+Auth is Supabase (managed OAuth); the DB is plain Postgres reached by connection
+string. Full design rationale and the build log: `docs/superpowers/specs/2026-09-02-project-skeleton-design.md`.
+
+### Running it
+
+Local dev is the **full stack in Docker Compose** — the only prerequisite is
+Docker. `Makefile` is the command entrypoint (`make` lists targets):
+
+- `make bootstrap` — first run (build images, start, migrate, seed)
+- `make up` / `make down` — daily start / stop
+- `make test` — backend `pytest` + frontend `vitest`
+- `make lint` — `pre-commit run --all-files` + `mypy`
+- `make migrate` / `make migration name="…"` — Alembic (migrations are **not** auto-run)
+
+`docs/local-development.md` covers running without Docker, environment variables,
+and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
+
+### Quality gates
+
+- **Backend**: ruff (lint + format), mypy (strict), pytest — config in
+  `backend/pyproject.toml`.
+- **Frontend**: eslint, `tsc --noEmit`, vitest.
+- **pre-commit** (`.pre-commit-config.yaml`): ruff + ruff-format on `backend/`,
+  eslint on `frontend/`, plus file hygiene. Run `pre-commit install` once.
+- **CI**: `.github/workflows/{backend,frontend}.yml`, path-filtered per sub-project;
+  same checks as above. Every PR must be green before merge.
+
+### Current state
+
+Skeleton only: the backend serves `GET /` and `GET /healthz`; the frontend renders
+a placeholder page. **Not built yet**: data model / migrations, the permission
+matrix, auth resolution, dashboards, reporting. The plan and order of work are in
+the design spec (§8 and the "Step 7" runbook). Schema-level work is additionally
+blocked on the requirements-spec `TODO:`s (positions/functions list, KPI catalog,
+report templates).
+
+### Conventions
+
+- **Branches**: `chore/DEV-XXXX_short_description` (`DEV-XXXX` = the Jira ticket).
+- **Commits / PR titles**: prefixed with the ticket ID, e.g. `chore: DEV-0015 ...`.
+- Changes land on `main` via PR; CI green is required.
 
 ---
 

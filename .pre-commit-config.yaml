@@ -1,0 +1,23 @@
+# Fast, self-contained pre-commit checks. eslint, mypy and the test suites are
+# enforced by CI (.github/workflows/) and `make lint` — they need the project's
+# Node / Docker toolchain, which a bare `git commit` shell often doesn't have.
+# Bump pinned revs with: pre-commit autoupdate
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+        exclude: '(^|/)tsconfig[^/]*\.json$'   # tsconfig files are JSONC (comments allowed)
+      - id: check-added-large-files
