@@ -1,9 +1,7 @@
 # Local Development
 
-> One-time project scaffolding is recorded in
-> `docs/superpowers/specs/2026-09-02-project-skeleton-design.md` §12 (setup
-> runbook). This page is the day-to-day reference: **how to run the app**, and
-> **how environment variables and secrets are managed**.
+The day-to-day reference: **how to run the app**, and **how environment variables
+and secrets are managed**.
 
 ---
 

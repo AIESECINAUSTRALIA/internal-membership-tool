@@ -14,9 +14,6 @@ AIESEC Australia's Membership / Data Management Platform. FastAPI API + React
 | Local dev | Docker Compose · Make |
 | Quality | pytest · vitest · ruff · mypy · eslint · pre-commit · GitHub Actions |
 
-Rationale for each choice is in the design spec
-(`docs/superpowers/specs/2026-09-02-project-skeleton-design.md` §2).
-
 ## Team
 
 | Name | Email | GitHub |
@@ -72,4 +69,4 @@ the database (`docker compose down -v && make bootstrap`).
 ## More
 
 - Running without Docker, secrets, deployment → **[docs/local-development.md](docs/local-development.md)**
-- Design & setup history → `docs/superpowers/specs/2026-09-02-project-skeleton-design.md`
+- Product requirements → `docs/membership-tool-requirements-spec.md`

@@ -24,7 +24,7 @@ Monorepo, two sub-projects:
 | Database | — | PostgreSQL 16, via Docker Compose |
 
 Auth is Supabase (managed OAuth); the DB is plain Postgres reached by connection
-string. Full design rationale and the build log: `docs/superpowers/specs/2026-09-02-project-skeleton-design.md`.
+string.
 
 ### Running it
 
@@ -54,9 +54,9 @@ and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
 
 Skeleton only: the backend serves `GET /` and `GET /healthz`; the frontend renders
 a placeholder page. **Not built yet**: data model / migrations, the permission
-matrix, auth resolution, dashboards, reporting. The plan and order of work are in
-the design spec (§8 and the "Step 7" runbook). Schema-level work is additionally
-blocked on the requirements-spec `TODO:`s (positions/functions list, KPI catalog,
+matrix, auth resolution, dashboards, reporting — see
+`docs/membership-tool-requirements-spec.md` for what these entail. Schema-level
+work is blocked on that spec's `TODO:`s (positions/functions list, KPI catalog,
 report templates).
 
 ### Conventions
