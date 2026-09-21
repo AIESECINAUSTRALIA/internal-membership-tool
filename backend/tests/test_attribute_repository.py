@@ -3,7 +3,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.attribute import (
-    Attribute,
     AttributeAppliesTo,
     AttributeDataType,
     AttributeEntityType,
@@ -15,35 +14,18 @@ from app.repositories.attribute import (
     set_attribute_value,
 )
 from tests.helpers import (
-    make_lc,
-    make_membership,
-    make_person,
-    make_position,
-    make_term,
+    make_attribute,
+    make_person_and_recorder,
 )
 
 
-def _make_person_and_recorder(session: Session) -> tuple:
-    """A person plus a membership id to record attribute changes under."""
-    lc = make_lc(session)
-    position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)
-    term = make_term(session)
-    person = make_person(session)
-    recorder = make_membership(session, person=person, lc=lc, position=position, term=term)
-    return person, recorder.id
-
-
 def test_set_and_get_person_attribute(db_session: Session) -> None:
-    person, recorder_id = _make_person_and_recorder(db_session)
-    attribute = Attribute(
-        key="dietary_requirements",
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session,
+        key="test_dietary_requirements",
         label="Dietary requirements",
-        applies_to=AttributeAppliesTo.PERSON,
-        data_type=AttributeDataType.TEXT,
-        active=True,
     )
-    db_session.add(attribute)
-    db_session.flush()
 
     set_attribute_value(
         db_session,
@@ -64,16 +46,14 @@ def test_set_and_get_person_attribute(db_session: Session) -> None:
 
 
 def test_setting_again_overwrites_rather_than_duplicates(db_session: Session) -> None:
-    person, recorder_id = _make_person_and_recorder(db_session)
-    attribute = Attribute(
-        key="onboarding_complete",
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session,
+        key="test_onboarding_complete",
         label="Onboarding complete",
         applies_to=AttributeAppliesTo.MEMBERSHIP,
         data_type=AttributeDataType.BOOLEAN,
-        active=True,
     )
-    db_session.add(attribute)
-    db_session.flush()
 
     set_attribute_value(
         db_session,
@@ -104,17 +84,14 @@ def test_setting_again_overwrites_rather_than_duplicates(db_session: Session) ->
 
 
 def test_rejects_value_outside_enum_options(db_session: Session) -> None:
-    person, recorder_id = _make_person_and_recorder(db_session)
-    attribute = Attribute(
-        key="shirt_size",
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session,
+        key="test_shirt_size",
         label="Shirt size",
-        applies_to=AttributeAppliesTo.PERSON,
         data_type=AttributeDataType.ENUM,
         enum_options=["S", "M", "L"],
-        active=True,
     )
-    db_session.add(attribute)
-    db_session.flush()
 
     with pytest.raises(AttributeValidationError):
         set_attribute_value(
@@ -128,17 +105,15 @@ def test_rejects_value_outside_enum_options(db_session: Session) -> None:
 
 
 def test_rejects_value_below_configured_minimum(db_session: Session) -> None:
-    person, recorder_id = _make_person_and_recorder(db_session)
-    attribute = Attribute(
-        key="hours_committed",
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session,
+        key="test_hours_committed",
         label="Hours committed per week",
         applies_to=AttributeAppliesTo.MEMBERSHIP,
         data_type=AttributeDataType.NUMBER,
         validation={"min": 0},
-        active=True,
     )
-    db_session.add(attribute)
-    db_session.flush()
 
     with pytest.raises(AttributeValidationError):
         set_attribute_value(
@@ -152,17 +127,13 @@ def test_rejects_value_below_configured_minimum(db_session: Session) -> None:
 
 
 def test_rejects_missing_required_value(db_session: Session) -> None:
-    person, recorder_id = _make_person_and_recorder(db_session)
-    attribute = Attribute(
-        key="join_reason",
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session,
+        key="test_join_reason",
         label="Reason for joining",
-        applies_to=AttributeAppliesTo.PERSON,
-        data_type=AttributeDataType.TEXT,
         validation={"required": True},
-        active=True,
     )
-    db_session.add(attribute)
-    db_session.flush()
 
     with pytest.raises(AttributeValidationError):
         set_attribute_value(

@@ -100,6 +100,40 @@ def make_membership(
     return membership
 
 
+def make_person_and_recorder(session: Session) -> tuple:
+    """A person plus a membership id to use as recorded_by in attribute tests."""
+    lc = make_lc(session)
+    position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)
+    term = make_term(session)
+    person = make_person(session)
+    recorder = make_membership(session, person=person, lc=lc, position=position, term=term)
+    return person, recorder.id
+
+
+def make_attribute(
+    session: Session,
+    *,
+    key: str = "test_attr",
+    label: str = "Test Attribute",
+    applies_to: AttributeAppliesTo = AttributeAppliesTo.PERSON,
+    data_type: AttributeDataType = AttributeDataType.TEXT,
+    enum_options: list[str] | None = None,
+    validation: dict[str, object] | None = None,
+) -> Attribute:
+    attribute = Attribute(
+        key=key,
+        label=label,
+        applies_to=applies_to,
+        data_type=data_type,
+        enum_options=enum_options,
+        validation=validation,
+        active=True,
+    )
+    session.add(attribute)
+    session.flush()
+    return attribute
+
+
 def make_kpi_attribute(
     session: Session,
     *,

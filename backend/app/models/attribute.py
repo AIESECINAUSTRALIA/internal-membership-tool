@@ -13,7 +13,7 @@ the schema is EAV while everything else is plain relational tables.
 """
 
 import enum
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import (
     JSON,
@@ -152,4 +152,4 @@ class AttributeValue(Base):
     value_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     value_bool: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     recorded_by: Mapped[int] = mapped_column(ForeignKey("membership.id"))
-    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))

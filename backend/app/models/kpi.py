@@ -18,7 +18,7 @@ record in the same window) — it's enforced by convention and by
 """
 
 import enum
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import Date, DateTime, Enum, ForeignKey, Index, Integer, Numeric, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -72,4 +72,4 @@ class KpiRecord(Base):
     )
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_by: Mapped[int] = mapped_column(ForeignKey("membership.id"))
-    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))

@@ -9,7 +9,7 @@ rather than constructing rows directly.
 """
 
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -158,7 +158,7 @@ def set_attribute_value(
     for column, value in columns.items():
         setattr(existing, column, value)
     existing.recorded_by = recorded_by_membership_id
-    existing.recorded_at = datetime.utcnow()
+    existing.recorded_at = datetime.now(UTC)
 
     session.flush()
     return existing

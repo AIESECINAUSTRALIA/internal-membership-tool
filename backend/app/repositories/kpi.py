@@ -8,7 +8,7 @@ it rather than constructing rows directly.
 """
 
 from collections.abc import Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -81,7 +81,7 @@ def record_kpi(
         source=source,
         note=note,
         recorded_by=recorded_by_membership_id,
-        recorded_at=datetime.utcnow(),
+        recorded_at=datetime.now(UTC),
     )
     session.add(record)
     session.flush()
