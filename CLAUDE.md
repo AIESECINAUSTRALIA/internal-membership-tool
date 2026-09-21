@@ -55,10 +55,11 @@ and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
 
 The backend serves `GET /` and `GET /healthz`, and has the initial relational schema
 (`lc`, `term`, `position`, `function`, `person`, `membership`, `team`, `team_member`),
-a repository layer and baseline seeds — see `docs/data-model.md`. The frontend renders
-a placeholder page. **Not built yet**: the permission matrix and auth resolution, the
-`attribute` / `kpi_record` / `audit_log` tables, any feature API or page, dashboards,
-reporting — see `docs/membership-tool-requirements-spec.md` for what these entail.
+a repository layer and baseline seeds — see `docs/data-model.md`. The frontend has its
+first slice (theme, app shell, sign-in, Home, Profile, Membership summary) running on a
+mock API — see `docs/frontend.md`. **Not built yet**: the real permission matrix and auth
+resolution, the `attribute` / `kpi_record` / `audit_log` tables, any backend feature API,
+the Tracking / Data / Settings pages and Admin console, dashboards, reporting — see `docs/membership-tool-requirements-spec.md` for what these entail.
 
 The spec has moved ahead of the code. Positions, functions, the hierarchy rules and
 the pages (spec §2, §2A, §3.4–3.6) are settled, but the existing schema and seeds
