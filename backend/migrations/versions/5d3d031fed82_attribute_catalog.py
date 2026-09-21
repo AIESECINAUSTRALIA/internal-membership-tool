@@ -28,9 +28,9 @@ def upgrade() -> None:
         sa.Column(
             "applies_to",
             sa.Enum(
-                "person",
-                "membership",
-                "kpi",
+                "PERSON",
+                "MEMBERSHIP",
+                "KPI",
                 name="attributeappliesto",
                 native_enum=False,
                 length=20,
@@ -41,11 +41,11 @@ def upgrade() -> None:
         sa.Column(
             "data_type",
             sa.Enum(
-                "text",
-                "number",
-                "date",
-                "boolean",
-                "enum",
+                "TEXT",
+                "NUMBER",
+                "DATE",
+                "BOOLEAN",
+                "ENUM",
                 name="attributedatatype",
                 native_enum=False,
                 length=10,
@@ -72,8 +72,8 @@ def upgrade() -> None:
         sa.Column(
             "entity_type",
             sa.Enum(
-                "person",
-                "membership",
+                "PERSON",
+                "MEMBERSHIP",
                 name="attributeentitytype",
                 native_enum=False,
                 length=10,

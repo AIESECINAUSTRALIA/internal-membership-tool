@@ -1,6 +1,7 @@
-import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+import pytest
 
 from app.models.attribute import (
     Attribute,
@@ -15,6 +16,8 @@ from app.repositories.attribute import (
     set_attribute_value,
 )
 from tests.helpers import (
+    TODAY,
+    YEAR_AGO,
     make_lc,
     make_membership,
     make_person,

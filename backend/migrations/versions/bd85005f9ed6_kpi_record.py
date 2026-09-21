@@ -32,10 +32,10 @@ def upgrade() -> None:
         sa.Column(
             "source",
             sa.Enum(
-                "self",
-                "leader",
-                "import",
-                "system",
+                "SELF",
+                "LEADER",
+                "IMPORT",
+                "SYSTEM",
                 name="kpisource",
                 native_enum=False,
                 length=10,
