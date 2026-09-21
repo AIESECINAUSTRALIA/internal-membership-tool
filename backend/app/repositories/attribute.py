@@ -44,13 +44,9 @@ def _type_check(attribute: Attribute, raw_value: object) -> dict[str, object | N
         # Two sequential checks (rather than one combined condition) so type
         # narrowing carries `raw_value` through to `int | float` below.
         if isinstance(raw_value, bool):
-            raise AttributeValidationError(
-                f"{attribute.key}: expected a number, got {raw_value!r}"
-            )
+            raise AttributeValidationError(f"{attribute.key}: expected a number, got {raw_value!r}")
         if not isinstance(raw_value, int | float):
-            raise AttributeValidationError(
-                f"{attribute.key}: expected a number, got {raw_value!r}"
-            )
+            raise AttributeValidationError(f"{attribute.key}: expected a number, got {raw_value!r}")
         columns["value_number"] = float(raw_value)
     elif attribute.data_type == AttributeDataType.DATE:
         if isinstance(raw_value, datetime):

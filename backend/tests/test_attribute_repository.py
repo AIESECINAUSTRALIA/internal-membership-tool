@@ -105,9 +105,13 @@ def test_setting_again_overwrites_rather_than_duplicates(db_session: Session) ->
         recorded_by_membership_id=recorder_id,
     )
 
-    rows = db_session.execute(
-        select(AttributeValue).where(AttributeValue.attribute_id == attribute.id)
-    ).scalars().all()
+    rows = (
+        db_session.execute(
+            select(AttributeValue).where(AttributeValue.attribute_id == attribute.id)
+        )
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
     assert rows[0].value_bool is True
 
