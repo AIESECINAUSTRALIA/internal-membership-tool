@@ -1,76 +1,33 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from sqlalchemy.orm import Session
 
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.kpi import KpiSource
-from app.models.membership import Membership, Team, TeamMember
-from app.models.org import LC, Function, LCType, Position, Term
-from app.models.person import Person
+from app.models.membership import Team, TeamMember
 from app.repositories.attribute import AttributeValidationError
 from app.repositories.kpi import record_kpi, sum_by_function
-
-TODAY = date(2026, 6, 15)
-YEAR_AGO = TODAY - timedelta(days=365)
-YEAR_AHEAD = TODAY + timedelta(days=365)
-
-
-def _make_lc_and_term(session: Session) -> tuple[LC, Term, Position]:
-    lc = LC(name="AIESEC in Testville", type=LCType.LC, active=True)
-    term = Term(name="Test Term", start_date=YEAR_AGO, end_date=YEAR_AHEAD)
-    position = Position(key="member", label="Member", rank=4, active=True)
-    session.add_all([lc, term, position])
-    session.flush()
-    return lc, term, position
-
-
-def _make_membership(
-    session: Session, *, lc: LC, term: Term, position: Position, function: Function, email: str
-) -> Membership:
-    person = Person(full_name=email, aiesec_email=email, join_date=YEAR_AGO)
-    session.add(person)
-    session.flush()
-    membership = Membership(
-        person_id=person.id,
-        lc_id=lc.id,
-        position_id=position.id,
-        function_id=function.id,
-        term_id=term.id,
-        start_date=YEAR_AGO,
-        end_date=None,
-    )
-    session.add(membership)
-    session.flush()
-    return membership
-
-
-def _make_kpi_attribute(
-    session: Session, *, key: str = "ol_signups", minimum: float = 0
-) -> Attribute:
-    attribute = Attribute(
-        key=key,
-        label="OL Signups",
-        applies_to=AttributeAppliesTo.KPI,
-        data_type=AttributeDataType.NUMBER,
-        unit="count",
-        validation={"required": True, "min": minimum},
-        active=True,
-    )
-    session.add(attribute)
-    session.flush()
-    return attribute
+from tests.helpers import (
+    YEAR_AGO,
+    make_function,
+    make_kpi_attribute,
+    make_lc,
+    make_membership,
+    make_person,
+    make_position,
+    make_term,
+)
 
 
 def test_record_kpi_inserts_a_row(db_session: Session) -> None:
-    lc, term, position = _make_lc_and_term(db_session)
-    function = Function(key="bd", label="BD", active=True)
-    db_session.add(function)
-    db_session.flush()
-    membership = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=function, email="a@aiesec.net"
-    )
-    attribute = _make_kpi_attribute(db_session)
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    attribute = make_kpi_attribute(db_session)
 
     record = record_kpi(
         db_session,
@@ -89,13 +46,12 @@ def test_record_kpi_inserts_a_row(db_session: Session) -> None:
 
 
 def test_record_kpi_resolves_team_id_as_of_period_start(db_session: Session) -> None:
-    lc, term, position = _make_lc_and_term(db_session)
-    function = Function(key="bd", label="BD", active=True)
-    db_session.add(function)
-    db_session.flush()
-    membership = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=function, email="a@aiesec.net"
-    )
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
     team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name="BD Team 1")
     db_session.add(team)
     db_session.flush()
@@ -103,7 +59,7 @@ def test_record_kpi_resolves_team_id_as_of_period_start(db_session: Session) -> 
         TeamMember(team_id=team.id, membership_id=membership.id, start_date=YEAR_AGO, end_date=None)
     )
     db_session.flush()
-    attribute = _make_kpi_attribute(db_session)
+    attribute = make_kpi_attribute(db_session)
 
     record = record_kpi(
         db_session,
@@ -120,13 +76,12 @@ def test_record_kpi_resolves_team_id_as_of_period_start(db_session: Session) -> 
 
 
 def test_record_kpi_rejects_non_kpi_attribute(db_session: Session) -> None:
-    lc, term, position = _make_lc_and_term(db_session)
-    function = Function(key="bd", label="BD", active=True)
-    db_session.add(function)
-    db_session.flush()
-    membership = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=function, email="a@aiesec.net"
-    )
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
     not_a_kpi = Attribute(
         key="shirt_size",
         label="Shirt size",
@@ -151,14 +106,13 @@ def test_record_kpi_rejects_non_kpi_attribute(db_session: Session) -> None:
 
 
 def test_record_kpi_rejects_value_below_minimum(db_session: Session) -> None:
-    lc, term, position = _make_lc_and_term(db_session)
-    function = Function(key="bd", label="BD", active=True)
-    db_session.add(function)
-    db_session.flush()
-    membership = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=function, email="a@aiesec.net"
-    )
-    attribute = _make_kpi_attribute(db_session, minimum=0)
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    attribute = make_kpi_attribute(db_session, minimum=0)
 
     with pytest.raises(AttributeValidationError):
         record_kpi(
@@ -174,19 +128,16 @@ def test_record_kpi_rejects_value_below_minimum(db_session: Session) -> None:
 
 
 def test_sum_by_function_returns_correct_totals_within_range(db_session: Session) -> None:
-    lc, term, position = _make_lc_and_term(db_session)
-    bd = Function(key="bd", label="BD", active=True)
-    mkt = Function(key="mkt", label="MKT", active=True)
-    db_session.add_all([bd, mkt])
-    db_session.flush()
-
-    bd_member = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=bd, email="bd@aiesec.net"
-    )
-    mkt_member = _make_membership(
-        db_session, lc=lc, term=term, position=position, function=mkt, email="mkt@aiesec.net"
-    )
-    attribute = _make_kpi_attribute(db_session)
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    bd = make_function(db_session, key="test_bd", label="Test BD")
+    mkt = make_function(db_session, key="test_mkt", label="Test MKT")
+    bd_person = make_person(db_session, email="bd@aiesec.net")
+    mkt_person = make_person(db_session, email="mkt@aiesec.net")
+    bd_member = make_membership(db_session, person=bd_person, lc=lc, position=position, term=term, function=bd)
+    mkt_member = make_membership(db_session, person=mkt_person, lc=lc, position=position, term=term, function=mkt)
+    attribute = make_kpi_attribute(db_session)
 
     # In range for both functions.
     record_kpi(
@@ -242,4 +193,4 @@ def test_sum_by_function_returns_correct_totals_within_range(db_session: Session
         )
     }
 
-    assert totals == {"bd": 15, "mkt": 7}
+    assert totals == {"test_bd": 15, "test_mkt": 7}

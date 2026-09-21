@@ -1,8 +1,7 @@
-from datetime import date, timedelta
-
-import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+import pytest
 
 from app.models.attribute import (
     Attribute,
@@ -11,38 +10,29 @@ from app.models.attribute import (
     AttributeEntityType,
     AttributeValue,
 )
-from app.models.membership import Membership
-from app.models.org import LC, LCType, Position, Term
-from app.models.person import Person
 from app.repositories.attribute import (
     AttributeValidationError,
     get_attribute_value,
     set_attribute_value,
 )
+from tests.helpers import (
+    TODAY,
+    YEAR_AGO,
+    make_lc,
+    make_membership,
+    make_person,
+    make_position,
+    make_term,
+)
 
-TODAY = date(2026, 6, 15)
-YEAR_AGO = TODAY - timedelta(days=365)
 
-
-def _make_person_and_recorder(session: Session) -> tuple[Person, int]:
+def _make_person_and_recorder(session: Session) -> tuple:
     """A person plus a membership id to record attribute changes under."""
-    lc = LC(name="AIESEC in Testville", type=LCType.LC, active=True)
-    position = Position(key="lcvp", label="LC Vice President", rank=2, active=True)
-    term = Term(name="Test Term", start_date=YEAR_AGO, end_date=TODAY + timedelta(days=365))
-    person = Person(full_name="Ada Lovelace", aiesec_email="ada@aiesec.net", join_date=YEAR_AGO)
-    session.add_all([lc, position, term, person])
-    session.flush()
-
-    recorder = Membership(
-        person_id=person.id,
-        lc_id=lc.id,
-        position_id=position.id,
-        term_id=term.id,
-        start_date=YEAR_AGO,
-        end_date=None,
-    )
-    session.add(recorder)
-    session.flush()
+    lc = make_lc(session)
+    position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)
+    term = make_term(session)
+    person = make_person(session)
+    recorder = make_membership(session, person=person, lc=lc, position=position, term=term)
     return person, recorder.id
 
 
