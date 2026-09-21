@@ -183,7 +183,7 @@ def get_attribute_value(
     if row is None:
         return None
     for column in _VALUE_COLUMNS:
-        value = getattr(row, column)
+        value: object | None = getattr(row, column)
         if value is not None:
             return value
     return None
