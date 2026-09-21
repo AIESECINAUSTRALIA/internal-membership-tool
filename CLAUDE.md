@@ -10,8 +10,9 @@ This file gives Claude persistent context on this project. Read it before making
 
 ## Repo state & conventions
 
-The project **skeleton** has landed (DEV-0015). The stack runs end-to-end, but no
-product features are built yet — see "Current state" below.
+The project **skeleton** (DEV-0015) and the initial relational schema (#13) have
+landed. The stack runs end-to-end, but no product features are built yet — see
+"Current state" below.
 
 ### Stack & layout
 
@@ -20,7 +21,7 @@ Monorepo, two sub-projects:
 | | Path | Stack |
 |---|---|---|
 | Backend | `backend/` | FastAPI · SQLAlchemy 2 + Alembic · Pydantic · **uv** (`uv.lock`) · Python **3.12** |
-| Frontend | `frontend/` | Vite · React · TypeScript · **npm** (`package-lock.json`) · Node **22** (`.nvmrc`) |
+| Frontend | `frontend/` | Vite · React · TypeScript · **Material UI (MUI)** · **npm** (`package-lock.json`) · Node **22** (`.nvmrc`) |
 | Database | — | PostgreSQL 16, via Docker Compose |
 
 Auth is Supabase (managed OAuth); the DB is plain Postgres reached by connection
@@ -52,12 +53,27 @@ and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
 
 ### Current state
 
-Skeleton only: the backend serves `GET /` and `GET /healthz`; the frontend renders
-a placeholder page. **Not built yet**: data model / migrations, the permission
-matrix, auth resolution, dashboards, reporting — see
-`docs/membership-tool-requirements-spec.md` for what these entail. Schema-level
-work is blocked on that spec's `TODO:`s (positions/functions list, KPI catalog,
-report templates).
+The backend serves `GET /` and `GET /healthz`, and has the initial relational schema
+(`lc`, `term`, `position`, `function`, `person`, `membership`, `team`, `team_member`),
+a repository layer and baseline seeds — see `docs/data-model.md`. The frontend renders
+a placeholder page. **Not built yet**: the permission matrix and auth resolution, the
+`attribute` / `kpi_record` / `audit_log` tables, any feature API or page, dashboards,
+reporting — see `docs/membership-tool-requirements-spec.md` for what these entail.
+
+The spec has moved ahead of the code. Positions, functions, the hierarchy rules and
+the pages (spec §2, §2A, §3.4–3.6) are settled, but the existing schema and seeds
+still reflect an older baseline: `docs/data-model.md` ("Known differences from the
+spec") lists what to change. Still blocked on the spec's `TODO:`s: the KPI catalog
+and the report templates.
+
+### Frontend standards
+
+- **UI:** Material UI (MUI). Style through the MUI theme only — no one-off CSS.
+- **Accessibility:** WCAG AA. **Light theme by default**; dark mode is V2.
+- **Brand:** logos in `frontend/images/`, colours in `docs/brand_guidelines.md` as
+  optional accents. Text is always black or white (contrast table: spec §2A.11).
+- **Pages and behaviour:** spec §2A is the source of truth. Until the backend
+  endpoints exist, use mock data behind one API interface.
 
 ### Conventions
 
@@ -90,11 +106,11 @@ Replaces scattered LC productivity spreadsheets with a single source-of-truth da
 
 **Core pillars:**
 - **Auth:** OAuth login via AIESEC emails.
-- **Access control:** two-dimensional — **position × function**, not flat role checks (e.g. LCP / VP / Team Leader / Member combined with function like MCBD). Must be implemented as a data-driven permission matrix (DB table), not hardcoded if/else logic.
+- **Access control:** two-dimensional — **position × function**, not flat role checks (positions and functions are listed in spec §2, e.g. LCVP combined with oGV). Must be implemented as a data-driven permission matrix (DB table), not hardcoded if/else logic. Who may add or track whom follows the hierarchy rule (spec §3.4).
 - **Data model:** single relational source of truth. No feature should require manually re-linking spreadsheets. KPI/productivity data granular enough that rollups and reports are computed via query, not maintained as separately-entered aggregates.
 - **Analytics:** dashboards with custom date-range filtering (not fixed presets only).
 - **Reporting:** NAMs, SONA, MTR generated from queries against granular data. Get and follow the actual current report templates before finalising schema — don't guess field lists.
-- **Privacy/deletion:** genuine deletion requests must be honoured. Prefer **anonymisation over hard delete** where records have downstream aggregate/reporting dependencies (KPI history, generated reports). Map cascading effects explicitly. Maintain an audit trail of deletion requests (logging the action taken, not the deleted personal data itself).
+- **Privacy/deletion:** genuine deletion requests must be honoured. Prefer **anonymisation over hard delete** where records have downstream aggregate/reporting dependencies (KPI history, generated reports). Map cascading effects explicitly. When the workflow is built, keep an audit trail of deletion requests (logging the action taken, not the deleted personal data itself). The in-app deletion-request workflow is a **later feature** (offered once in production, spec §8): do not build it this term. Collect only an AIESEC email as contact data (no phone, no personal email), and never build a feature that exports personal data.
 - **Exchange SU linking:** out of scope to build this term, but the person/member data model should be designed so a future SU→application→opened-exchange table can FK into it later. Don't build the pipeline now.
 
 ### 2. Website (replacing WordPress)
@@ -107,6 +123,9 @@ Motivation for replacing WordPress (design/speed vs. CMS usability vs. need for 
 - Website ↔ membership tool shared auth/integration (unless the website project independently reaches that point)
 - Automated/scheduled report generation or exports
 - Mobile app / offline support
+- Incoming exchange functions (e.g. iGV, iGTe)
+- Dark mode and homepage customisation (V2)
+- In-app deletion-request workflow (offered once in production)
 - Any custom payment handling — if payments are ever needed, use Stripe or similar, never build it in-house
 
 ---

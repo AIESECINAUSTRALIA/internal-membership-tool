@@ -141,16 +141,47 @@ blocks the case where doing so would silently corrupt historical records.
 
 ## Seed data
 
-`backend/app/seeds/seed_lookups.py` seeds `position` and `function` with the
-**working set** listed in spec §2 — it is explicitly **not** the
-authoritative list. Spec §2 and §12 (item 1) mark the real list as a
-`TODO:`, pending confirmation against AIESEC Australia's current national
-structure docs. Positions/functions are runtime-editable (spec §1.5), so
-once the authoritative list is confirmed, correcting the seeded rows is an
-admin task done through the app — not a new migration or a code change.
+`backend/app/seeds/seed_lookups.py` seeds `position` and `function` with an
+**older working baseline**. The authoritative lists are now in spec §2 (seven
+positions with a level and rank, and fifteen functions), so the seed needs
+updating to match — see "Known differences from the spec" below. Positions and
+functions stay runtime-editable (spec §1.5) once seeded.
 
 The seed script is idempotent (checks existing `key`s before inserting), so
 running `make seed` more than once is safe.
+
+## Known differences from the spec
+
+The spec (`docs/membership-tool-requirements-spec.md`) has moved ahead of the
+initial migration. Everything above describes what is **implemented**. This
+table lists what the spec now expects instead, so a developer picking up the
+schema work knows what to change. Fix these in a migration and update this doc in
+the same PR.
+
+| Area | Implemented now | Spec target |
+|---|---|---|
+| `person` contact data | `personal_email` and `phone` columns | Removed. Only `aiesec_email` is collected (spec §4.1, §10) |
+| `person` name | One `full_name` column | First and last name (spec §2A.5) |
+| `person.timezone` | Absent | Added, set from the LC's state (spec §4.1) |
+| `lc.state` | Absent | Added (nullable), plus a `state_timezone` lookup table (spec §4.1) |
+| `membership.end_date` | Nullable | Required when adding a membership (spec §5.3) |
+| `position.rank` | Lower number = more senior (LCP = 1) | Higher number = higher position (Member = 1 … MCP = 7) (spec §2) |
+| `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
+| Seeded positions | `lcp`, `lcvp`, `team_leader`, `member` | Also `mcd`, `mcvp`, `mcp`, with level and rank from spec §2 |
+| Seeded functions | Ten, including `igv`, `igte`, `mkt` | The fifteen in spec §2. No incoming functions |
+
+Two things to watch when fixing the seeds:
+
+- `seed_lookups.py` only **inserts** keys that don't exist yet. Re-running it will
+  **not** change the ranks of existing rows, and will not remove old functions
+  like `igv`. Use a data migration or an update step, and deactivate (don't
+  delete) retired functions (spec §1.5).
+- `lc.type` is stored as `'LC'` / `'MC'` (uppercase). The spec's lowercase
+  `lc` / `mc` is informal wording, so keep the implemented values.
+
+The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record`,
+`audit_log` and `deletion_request` tables are not built yet. Their model files
+under `backend/app/models/` are empty stubs. Build them to the spec directly.
 
 ## Repository layer
 
