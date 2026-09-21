@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.membership import Membership
-from app.models.org import LC, LCType, Function, Position, Term
+from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person
 
 TODAY = date(2026, 6, 15)

@@ -26,7 +26,9 @@ def test_record_kpi_inserts_a_row(db_session: Session) -> None:
     position = make_position(db_session)
     function = make_function(db_session)
     person = make_person(db_session)
-    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
     attribute = make_kpi_attribute(db_session)
 
     record = record_kpi(
@@ -51,7 +53,9 @@ def test_record_kpi_resolves_team_id_as_of_period_start(db_session: Session) -> 
     position = make_position(db_session)
     function = make_function(db_session)
     person = make_person(db_session)
-    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
     team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name="BD Team 1")
     db_session.add(team)
     db_session.flush()
@@ -81,7 +85,9 @@ def test_record_kpi_rejects_non_kpi_attribute(db_session: Session) -> None:
     position = make_position(db_session)
     function = make_function(db_session)
     person = make_person(db_session)
-    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
     not_a_kpi = Attribute(
         key="shirt_size",
         label="Shirt size",
@@ -111,7 +117,9 @@ def test_record_kpi_rejects_value_below_minimum(db_session: Session) -> None:
     position = make_position(db_session)
     function = make_function(db_session)
     person = make_person(db_session)
-    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term, function=function)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
     attribute = make_kpi_attribute(db_session, minimum=0)
 
     with pytest.raises(AttributeValidationError):
@@ -135,8 +143,12 @@ def test_sum_by_function_returns_correct_totals_within_range(db_session: Session
     mkt = make_function(db_session, key="test_mkt", label="Test MKT")
     bd_person = make_person(db_session, email="bd@aiesec.net")
     mkt_person = make_person(db_session, email="mkt@aiesec.net")
-    bd_member = make_membership(db_session, person=bd_person, lc=lc, position=position, term=term, function=bd)
-    mkt_member = make_membership(db_session, person=mkt_person, lc=lc, position=position, term=term, function=mkt)
+    bd_member = make_membership(
+        db_session, person=bd_person, lc=lc, position=position, term=term, function=bd
+    )
+    mkt_member = make_membership(
+        db_session, person=mkt_person, lc=lc, position=position, term=term, function=mkt
+    )
     attribute = make_kpi_attribute(db_session)
 
     # In range for both functions.
