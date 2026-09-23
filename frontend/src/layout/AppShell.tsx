@@ -1,4 +1,4 @@
-import { Box, Container } from '@mui/material'
+import { Box } from '@mui/material'
 import { useState } from 'react'
 import { Outlet } from 'react-router-dom'
 
@@ -7,7 +7,9 @@ import { Sidebar } from './Sidebar'
 
 /**
  * The signed-in app frame: sidebar navigation on the left, a slim header on top, the
- * page below it. Content is left-aligned with a readable maximum width.
+ * page below it. Content fills the available width — pages that need a readable line
+ * length (body text) already cap it themselves, e.g. `sx={{ maxWidth: '65ch' }}` on
+ * description text, so a table or grid isn't left with unused space on a wide screen.
  */
 export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false)
@@ -43,9 +45,7 @@ export function AppShell() {
           tabIndex={-1}
           sx={{ flexGrow: 1, px: { xs: 2, md: 4 }, pt: 4, pb: 8, '&:focus': { outline: 'none' } }}
         >
-          <Container maxWidth="lg" disableGutters sx={{ mx: 0 }}>
-            <Outlet />
-          </Container>
+          <Outlet />
         </Box>
       </Box>
     </Box>

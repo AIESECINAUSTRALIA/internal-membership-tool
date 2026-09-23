@@ -86,10 +86,25 @@ describe('placeholder pages and the profile', () => {
     }
   })
 
-  it('says what a placeholder page will do', async () => {
-    await renderApp('lcvp', '/tracking', true)
+  it('shows the Tracking scaffold, with "Track someone" hidden from a Member', async () => {
+    await renderApp('member', '/tracking', true)
     expect(await screen.findByRole('heading', { name: 'Tracking' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'Not built yet' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'My tracking' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Track someone' })).not.toBeInTheDocument()
+  })
+
+  it('shows "Track someone" to a Team Leader, who may edit their team’s kpi_record', async () => {
+    await renderApp('tl', '/tracking', true)
+    expect(await screen.findByRole('heading', { name: 'Track someone' })).toBeInTheDocument()
+  })
+
+  it('shows the Data scaffold, with a Filters section and no Build a report dialog until asked', async () => {
+    await renderApp('lcp', '/data', true)
+    expect(await screen.findByRole('heading', { name: 'Data' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Filters' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Build a report' }))
+    expect(await screen.findByRole('heading', { name: 'Build a report' })).toBeInTheDocument()
   })
 
   it('keeps Data away from a Member, who has no analytics permission', async () => {

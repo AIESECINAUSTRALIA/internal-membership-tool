@@ -30,6 +30,10 @@ const add = (overrides: Partial<AddMemberInput>): AddMemberInput => ({
   lcId: 'lc-usyd',
   positionKey: 'member',
   functionKey: 'ogv',
+  // Matches the default lcId/functionKey above — a team-holding position needs a team
+  // in that same LC + function (§3.4). Tests overriding functionKey/lcId must also
+  // override this to a matching team.
+  teamId: 'team-usyd-ogv-a',
   // Starts today, so the new membership is CURRENT and appears in the member list (§2A.5).
   startDate: TODAY,
   endDate: '2026-12-31',
@@ -111,7 +115,7 @@ describe('adding a member on the server (§2A.5, §3.4, §3.6, §5.1)', () => {
 
   it('asks to confirm when the email exists, and only then attaches the membership', async () => {
     const api = await apiAs('lcvp')
-    const request = add({ email: 'sam@aiesec.example', functionKey: 'bnm' })
+    const request = add({ email: 'sam@aiesec.example', functionKey: 'bnm', teamId: 'team-usyd-bnm-a' })
     expect(await api.addMember(request)).toEqual({ status: 'confirm_existing' })
     expect(await api.addMember({ ...request, confirmedExisting: true })).toEqual({ status: 'created' })
     const sam = (await api.listMembers(ALL)).rows.filter((r) => r.personId === 'p-sam')
@@ -140,6 +144,69 @@ describe('adding a member on the server (§2A.5, §3.4, §3.6, §5.1)', () => {
   it('rejects an end date before the start date', async () => {
     const result = await (await apiAs('lcvp')).addMember(add({ startDate: '2026-12-31', endDate: '2026-09-23' }))
     expect(result.status).toBe('rejected')
+  })
+
+  it('resolves each team\'s current leader for display, or null when none is assigned', async () => {
+    const api = await apiAs('lcvp')
+    const { teams } = await api.getReferenceData()
+    const ogtaA = teams.find((t) => t.id === 'team-usyd-ogta-a')!
+    expect(ogtaA.leader?.name).toBeTruthy() // p-priya leads it
+    const tmA = teams.find((t) => t.id === 'team-usyd-tm-a')!
+    expect(tmA).toBeDefined()
+  })
+
+  it('an LC Vice President can pick a specific team, and the membership lands there (§3.4)', async () => {
+    const api = await apiAs('lcvp')
+    await api.addMember(
+      add({ email: 'chose-team-b@aiesec.example', firstName: 'ChoseTeamB', lastName: 'Test', teamId: 'team-usyd-ogv-b' }),
+    )
+    const { rows } = await api.listMembers(ALL)
+    expect(rows.find((r) => r.firstName === 'ChoseTeamB')!.roles[0].teamId).toBe('team-usyd-ogv-b')
+  })
+
+  it('rejects adding a team-holding position with no team, or a team outside the LC/function', async () => {
+    const api = await apiAs('lcvp')
+    expect((await api.addMember(add({ teamId: undefined }))).status).toBe('rejected')
+    // team-usyd-bnm-a is a real team, but in the wrong function for this request (ogv).
+    expect((await api.addMember(add({ teamId: 'team-usyd-bnm-a' }))).status).toBe('rejected')
+  })
+
+  it('a Team Leader of two teams: the added membership lands in whichever team is chosen (§3.4)', async () => {
+    const api = await apiAs('dualTl')
+    const me = (await api.getMe())!
+    const ogv = me.memberships.find((m) => m.team?.name === 'oGV Team A')!
+    const ogta = me.memberships.find((m) => m.team?.name === 'oGTa Team A')!
+
+    await api.addMember(
+      add({ email: 'via-ogv@aiesec.example', firstName: 'ViaOgv', lastName: 'Test', functionKey: 'ogv', membershipId: ogv.id }),
+    )
+    await api.addMember(
+      add({ email: 'via-ogta@aiesec.example', firstName: 'ViaOgta', lastName: 'Test', functionKey: 'ogta', membershipId: ogta.id }),
+    )
+
+    const { rows } = await api.listMembers(ALL)
+    expect(rows.find((r) => r.firstName === 'ViaOgv')!.roles[0].teamId).toBe(ogv.team!.id)
+    expect(rows.find((r) => r.firstName === 'ViaOgta')!.roles[0].teamId).toBe(ogta.team!.id)
+  })
+
+  it('defaults to the actor\'s own highest-ranked active membership when membershipId is omitted', async () => {
+    const api = await apiAs('dualTl')
+    const me = (await api.getMe())!
+    // Whichever of the two team_leader memberships comes first is the one `actingMembership`
+    // (and so the server, when no `membershipId` is sent) picks by default.
+    const defaultMembership = me.memberships.find((m) => m.position.key === 'team_leader')!
+
+    await api.addMember(
+      add({
+        email: 'default-team@aiesec.example',
+        firstName: 'DefaultTeam',
+        lastName: 'Test',
+        functionKey: defaultMembership.function!.key,
+      }),
+    )
+
+    const { rows } = await api.listMembers(ALL)
+    expect(rows.find((r) => r.firstName === 'DefaultTeam')!.roles[0].teamId).toBe(defaultMembership.team!.id)
   })
 })
 

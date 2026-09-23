@@ -8,18 +8,26 @@ import { beforeEach, describe, expect, it } from 'vitest'
 
 import { createMockApi } from '../api/mock/mockApi'
 import type { PersonaKey } from '../api/mock/seed'
-import type { MemberSummaryRow, Me, Permission } from '../api/types'
+import type { MemberSummaryRow, Me, Permission, Scope } from '../api/types'
 import {
+  actingMembership,
+  actingMembershipCandidates,
   actorFromMe,
   addableFunctions,
   addableLcs,
   addablePositions,
+  addableTeams,
+  availableDataScopes,
   can,
+  canTrackOthers,
+  distinctFunctions,
   fixedTeam,
   hasActiveMembership,
+  hasMinScope,
   homeChartScope,
-  isLcFixed,
+  narrowToMembership,
   rowActions,
+  trackableRoleIds,
   visibleNavItems,
   widestScope,
 } from '../auth/permissions'
@@ -63,6 +71,30 @@ describe('permission resolution', () => {
   })
 })
 
+describe('hasMinScope', () => {
+  it('is true when the widest grant is exactly the minimum', () => {
+    expect(hasMinScope([{ resource: 'analytics_report', action: 'view', scope: 'team' }], 'analytics_report', 'view', 'team')).toBe(true)
+  })
+
+  it('is true when the widest grant is wider than the minimum', () => {
+    expect(hasMinScope([{ resource: 'analytics_report', action: 'view', scope: 'all' }], 'analytics_report', 'view', 'team')).toBe(true)
+  })
+
+  it('is false when the widest grant is narrower than the minimum', () => {
+    expect(hasMinScope([{ resource: 'analytics_report', action: 'view', scope: 'own' }], 'analytics_report', 'view', 'team')).toBe(false)
+  })
+
+  it('is false when there is no grant at all', () => {
+    expect(hasMinScope([], 'analytics_report', 'view', 'team')).toBe(false)
+  })
+
+  it("with minScope 'own', matches can() exactly", () => {
+    const grants: Permission[] = [{ resource: 'analytics_report', action: 'view', scope: 'own' }]
+    expect(hasMinScope(grants, 'analytics_report', 'view', 'own')).toBe(can(grants, 'analytics_report', 'view'))
+    expect(hasMinScope(grants, 'analytics_report', 'view', 'own')).toBe(true)
+  })
+})
+
 describe('allocation', () => {
   it('treats a person whose term has ended as not allocated', async () => {
     const { me } = await signInAs('unallocated')
@@ -89,6 +121,12 @@ describe('navigation gating', () => {
   ])('%s sees the right pages once they are all built', async (persona, expected) => {
     const { me } = await signInAs(persona)
     expect(keys(me, true)).toEqual(expected)
+  })
+
+  it('hides an item whose grant does not reach its minimum scope', () => {
+    const items = [{ key: 'a', built: true, requires: { resource: 'x', action: 'view' as const, minScope: 'team' as const } }]
+    expect(visibleNavItems(items, [{ resource: 'x', action: 'view', scope: 'own' }]).map((i) => i.key)).toEqual([])
+    expect(visibleNavItems(items, [{ resource: 'x', action: 'view', scope: 'team' }]).map((i) => i.key)).toEqual(['a'])
   })
 
   it('shows every page a person may open, now that all five exist', async () => {
@@ -190,7 +228,6 @@ describe('Add member: what each position may offer (§3.4, §3.6)', () => {
     const { me, actor, ref } = await signInAs('tl')
     const lcs = addableLcs(actor, me.permissions, ref.lcs)
     expect(lcs.map((l) => l.name)).toEqual(['USYD'])
-    expect(isLcFixed(me.permissions)).toBe(true)
     expect(keys(addablePositions(actor, me.permissions, ref.positions, lcs[0]))).toEqual(['member'])
     expect(fixedTeam(actor, me.permissions)?.team.name).toBe('oGV Team A')
     const member = ref.positions.find((p) => p.key === 'member')!
@@ -227,7 +264,6 @@ describe('Add member: what each position may offer (§3.4, §3.6)', () => {
     const mc = ref.lcs.find((l) => l.type === 'mc')!
     const usyd = ref.lcs.find((l) => l.name === 'USYD')!
     expect(addableLcs(actor, me.permissions, ref.lcs)).toHaveLength(4) // every LC and the MC
-    expect(isLcFixed(me.permissions)).toBe(false)
     expect(keys(addablePositions(actor, me.permissions, ref.positions, usyd))).toEqual(['member', 'team_leader', 'lcvp', 'lcp'])
     // §2: the MCVP can add the MCD, and nobody at or above the MCVP.
     expect(keys(addablePositions(actor, me.permissions, ref.positions, mc))).toEqual(['mcd'])
@@ -241,6 +277,89 @@ describe('Add member: what each position may offer (§3.4, §3.6)', () => {
       }
     }
   })
+
+  it('an LC Vice President can pick any team in their own LC + function, unlike a fixed Team Leader', async () => {
+    const { me, actor, ref } = await signInAs('lcvp')
+    const usyd = ref.lcs.find((l) => l.name === 'USYD')!
+    expect(addableTeams(actor, me.permissions, ref.teams, usyd, 'ogv').map((t) => t.name)).toEqual([
+      'oGV Team A',
+      'oGV Team B',
+    ])
+  })
+
+  it('an MC Vice President can pick a team in ANY LC, not just their own', async () => {
+    const { me, actor, ref } = await signInAs('mcvp')
+    const mu = ref.lcs.find((l) => l.name === 'MU')!
+    expect(addableTeams(actor, me.permissions, ref.teams, mu, 'ogv').map((t) => t.name)).toEqual(['oGV Team A'])
+  })
+
+  it('a Member (no create grant at all) is offered no teams', async () => {
+    const { me, actor, ref } = await signInAs('member')
+    const usyd = ref.lcs.find((l) => l.name === 'USYD')!
+    expect(addableTeams(actor, me.permissions, ref.teams, usyd, 'ogv')).toEqual([])
+  })
+})
+
+describe('Add member: choosing which of the actor\'s own memberships to act as (§3.4)', () => {
+  it('offers just the one candidate for a single-membership actor, matching actingMembership', async () => {
+    const { actor } = await signInAs('tl')
+    const candidates = actingMembershipCandidates(actor)
+    expect(candidates).toEqual([actingMembership(actor)])
+  })
+
+  it('offers both memberships for a Team Leader of two teams, with the first matching actingMembership', async () => {
+    const { actor } = await signInAs('dualTl')
+    const candidates = actingMembershipCandidates(actor)
+    expect(new Set(candidates.map((m) => m.team?.name))).toEqual(new Set(['oGV Team A', 'oGTa Team A']))
+    expect(candidates[0]).toEqual(actingMembership(actor))
+  })
+
+  it('fixedTeam follows whichever membership the actor is narrowed to, not just the first', async () => {
+    const { me, actor } = await signInAs('dualTl')
+    const [first, second] = actingMembershipCandidates(actor)
+    expect(fixedTeam(narrowToMembership(actor, first.id), me.permissions)?.team.name).toBe(first.team?.name)
+    expect(fixedTeam(narrowToMembership(actor, second.id), me.permissions)?.team.name).toBe(second.team?.name)
+  })
+})
+
+describe('Tracking (§2A.6): the function switcher and "Track someone"', () => {
+  it("Team Leader Ava holds two functions, so both show in her switcher", async () => {
+    const { actor } = await signInAs('tl') // signs in as p-ava: TL oGV, Member BnM
+    const keys = distinctFunctions(actor).map((f) => f.key)
+    expect(keys.sort()).toEqual(['bnm', 'ogv'])
+  })
+
+  it('a Member has no "Track someone", a Team Leader does (kpi_record.edit at team scope)', async () => {
+    const { me: memberMe } = await signInAs('member')
+    expect(canTrackOthers(memberMe.permissions)).toBe(false)
+    const { me: tlMe } = await signInAs('tl')
+    expect(canTrackOthers(tlMe.permissions)).toBe(true)
+  })
+
+  it('Team Leader can track their own team, but not themselves or another LC', async () => {
+    const { me, actor, rows } = await signInAs('tl')
+    expect(trackableRoleIds(actor, me.permissions, rowFor(rows, 'p-sam'))).toHaveLength(1) // their team
+    expect(trackableRoleIds(actor, me.permissions, rowFor(rows, 'p-ava'))).toHaveLength(0) // themselves
+  })
+
+  it('LC Vice President can track their own function only, not other functions in the LC', async () => {
+    const { me, actor, rows } = await signInAs('lcvp') // the default LCVP, oGV
+    expect(trackableRoleIds(actor, me.permissions, rowFor(rows, 'p-sam'))).toHaveLength(1) // Member, oGV
+    expect(trackableRoleIds(actor, me.permissions, rowFor(rows, 'p-priya'))).toHaveLength(0) // TL oGTa + Member BnM
+  })
+})
+
+describe('Data page scope tabs (§2A.7, §6)', () => {
+  it.each<[PersonaKey, Scope[]]>([
+    ['member', []], // no analytics_report.view at all
+    ['tl', ['team', 'function']],
+    ['lcvp', ['team', 'function']],
+    ['lcp', ['team', 'function', 'lc']],
+    ['mcvp', ['team', 'function', 'lc', 'all']],
+  ])('%s may see up to %s', async (persona, expected) => {
+    const { me } = await signInAs(persona)
+    expect(availableDataScopes(me.permissions)).toEqual(expected)
+  })
 })
 
 describe('homepage chart follows the position', () => {
@@ -252,6 +371,6 @@ describe('homepage chart follows the position', () => {
     ['mcvp', 'all'],
   ])('%s sees a %s chart', async (persona, scope) => {
     const { actor } = await signInAs(persona)
-    expect(homeChartScope(actor)).toBe(scope)
+    expect(homeChartScope(actingMembership(actor))).toBe(scope)
   })
 })

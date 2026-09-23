@@ -57,15 +57,22 @@ The backend serves `GET /` and `GET /healthz`, and has the initial relational sc
 (`lc`, `term`, `position`, `function`, `person`, `membership`, `team`, `team_member`),
 a repository layer and baseline seeds — see `docs/data-model.md`. The frontend has its
 first slice (theme, app shell, sign-in, Home, Profile, Membership summary) running on a
-mock API — see `docs/frontend.md`. **Not built yet**: the real permission matrix and auth
+mock API, plus real-layout scaffolds for Tracking, Data and Settings (no KPI data yet) —
+see `docs/frontend.md`. **Not built yet**: the real permission matrix and auth
 resolution, the `attribute` / `kpi_record` / `audit_log` tables, any backend feature API,
-the Tracking / Data / Settings pages and Admin console, dashboards, reporting — see `docs/membership-tool-requirements-spec.md` for what these entail.
+the Admin console, dashboards, reporting — see `docs/membership-tool-requirements-spec.md`
+for what these entail.
 
 The spec has moved ahead of the code. Positions, functions, the hierarchy rules and
 the pages (spec §2, §2A, §3.4–3.6) are settled, but the existing schema and seeds
 still reflect an older baseline: `docs/data-model.md` ("Known differences from the
 spec") lists what to change. Still blocked on the spec's `TODO:`s: the KPI catalog
 and the report templates.
+
+The next tranche of backend work — schema alignment, the permission matrix, the
+`attribute` / `kpi_record` / `audit_log` tables, and real auth — is ticketed in
+`ticket.md` (repo root). It's a working allocation list, not a permanent roadmap:
+update or clear it as tickets land.
 
 ### Frontend standards
 
@@ -142,7 +149,7 @@ Motivation for replacing WordPress (design/speed vs. CMS usability vs. need for 
 | Auth | Managed OAuth (e.g. Supabase Auth), no custom auth system. |
 | Code hosting | GitHub Organisation account (not personal accounts) — apply for GitHub's nonprofit program for free Team-tier features. ≥2 org owners at all times. Access via GitHub Teams tied to role, not individuals. |
 | Security | No outsourced security retainer. Instead: OWASP Top 10 as a dev checklist, Dependabot + Snyk free tier, one pre-launch external security/privacy audit, a one-page incident response plan. A genuine one-off Australian Privacy Act / APP compliance consult is worth paying for even though technical security is handled in-house. |
-| IP/ownership | All code and infra accounts owned by AIESEC Australia as an entity, confirmed in writing — never under individual personal accounts. |
+| IP/ownership | All code and infra accounts owned by AIESEC Australia as an entity, confirmed in writing — never under individual personal accounts. **Confirmed 2026-09-23** (resolves spec §12 #11): everything is owned by AIESEC Australia. |
 
 ---
 

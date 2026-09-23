@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useApi } from '../api/ApiContext'
 import type { HomeChart } from '../api/types'
 import { useAuth } from '../auth/authContext'
+import { EmptyChartState } from '../components/EmptyState'
 
 /**
  * A homepage block: self-contained so a later version can let people arrange or swap
@@ -21,11 +22,7 @@ function ChartBlock({ chart }: { chart: HomeChart | null }) {
         {chart?.scope === 'all' && 'All LCs, month by month.'}
       </Typography>
       {/* No KPI catalog yet (spec §4.3 TODO), so there are no points to plot. */}
-      {chart && chart.points.length === 0 && (
-        <Typography variant="h3" component="p" sx={{ mt: 4, mb: 2 }}>
-          No data exists
-        </Typography>
-      )}
+      {chart && chart.points.length === 0 && <EmptyChartState />}
     </Paper>
   )
 }

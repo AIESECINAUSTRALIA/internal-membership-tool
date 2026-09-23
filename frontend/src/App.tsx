@@ -22,9 +22,11 @@ const notAvailable = (
  * Routes. Guards decide which screen a person may reach from their resolved `me`
  * payload (spec §2A). The server still enforces access on every request.
  *
- * Tracking, Data and Settings are placeholders for now (`components/PlannedPage`). Replace
- * a page's body when its feature is built. Each route needs the same permission as its
- * menu item in `navigation/navConfig.ts`.
+ * Tracking, Data and Settings are scaffolds: real layout and controls, but the KPI
+ * catalog they need (spec §4.3) is still a TODO, so their data stays "No data exists"
+ * (see each page's own doc comment). Each route needs the same permission as its menu
+ * item in `navigation/navConfig.ts`, and the same minimum scope, where the nav item
+ * sets one.
  */
 export default function App() {
   return (
@@ -44,7 +46,7 @@ export default function App() {
           <Route element={<RequirePermission resource="kpi_record" action="view" fallback={notAvailable} />}>
             <Route path="tracking" element={<TrackingPage />} />
           </Route>
-          <Route element={<RequirePermission resource="analytics_report" action="view" fallback={notAvailable} />}>
+          <Route element={<RequirePermission resource="analytics_report" action="view" minScope="team" fallback={notAvailable} />}>
             <Route path="data" element={<DataPage />} />
           </Route>
           <Route path="settings" element={<SettingsPage />} />

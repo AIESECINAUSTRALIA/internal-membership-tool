@@ -22,6 +22,7 @@
 import type {
   Action,
   FunctionDef,
+  FunctionRef,
   IsoDate,
   Lc,
   Me,
@@ -30,6 +31,7 @@ import type {
   Permission,
   Position,
   Scope,
+  Team,
 } from '../api/types'
 
 /** Narrowest to widest. A wider scope covers everything a narrower one does. */
@@ -58,6 +60,22 @@ export function widestScope(
 
 export function can(permissions: readonly Permission[], resource: string, action: Action): boolean {
   return widestScope(permissions, resource, action) !== null
+}
+
+/**
+ * Whether the widest granted scope for (resource, action) is AT LEAST as wide as
+ * `minScope` (§3.2). `can()` only checks "is there any grant"; this checks "is the grant
+ * wide enough to be useful" — e.g. the Data page's group rollups (§2A.7) need at least
+ * 'team', since an 'own'-only grant has nothing to roll up.
+ */
+export function hasMinScope(
+  permissions: readonly Permission[],
+  resource: string,
+  action: Action,
+  minScope: Scope,
+): boolean {
+  const scope = widestScope(permissions, resource, action)
+  return scope !== null && scopeRank(scope) >= scopeRank(minScope)
 }
 
 // ---------------------------------------------------------------------------
@@ -142,15 +160,25 @@ export function outranks(actor: Actor, target: Position): boolean {
   return acting !== null && target.rank < acting.rank
 }
 
-function canEditMembership(
+/**
+ * The shared two-check rule (§3.4) behind Extend term, Move to team and Track someone:
+ * the matrix must grant `edit` on the resource at a scope that reaches the target, AND
+ * the target's position must rank below the actor's. Nobody can act on themselves this
+ * way, which is also why nobody can extend their own term or track themself here (§2A.5,
+ * §2A.6) — a person's OWN tracking is a separate, always-allowed path (§3.4).
+ */
+function canActOnTarget(
   actor: Actor,
   permissions: readonly Permission[],
-  resource: 'membership' | 'team_member',
+  resource: 'membership' | 'team_member' | 'kpi_record',
   target: TargetRole,
 ): boolean {
   const scope = widestScope(permissions, resource, 'edit')
   if (scope === null) return false
-  // Nobody can act on their own membership, so nobody can extend their own term (§2A.5).
+  // Load-bearing, not redundant with outranks(): outranks() compares against the
+  // actor's BEST active membership, not the specific target, so without this a
+  // multi-membership actor (e.g. Team Leader in one function, Member in another)
+  // could "outrank" their own lower-ranked membership and act on themselves.
   if (target.personId === actor.personId) return false
   return scopeCovers(scope, actor, target) && outranks(actor, target.position)
 }
@@ -161,7 +189,7 @@ export function canExtendTerm(
   permissions: readonly Permission[],
   target: TargetRole,
 ): boolean {
-  return canEditMembership(actor, permissions, 'membership', target)
+  return canActOnTarget(actor, permissions, 'membership', target)
 }
 
 /**
@@ -173,7 +201,7 @@ export function canMoveToTeam(
   permissions: readonly Permission[],
   target: TargetRole,
 ): boolean {
-  return canEditMembership(actor, permissions, 'team_member', target)
+  return canActOnTarget(actor, permissions, 'team_member', target)
 }
 
 export function targetRoleOf(row: MemberSummaryRow, role: MemberSummaryRow['roles'][number]): TargetRole {
@@ -191,6 +219,19 @@ export interface RowActions {
   extendRoleIds: string[]
   /** Memberships of this person the actor may move between teams. */
   moveRoleIds: string[]
+}
+
+/**
+ * Whether the "Manage membership" hub should show at all: does the actor hold
+ * `membership.edit` or `team_member.edit` at wider than `own` scope, for ANYONE.
+ * Whether a SPECIFIC person may be managed is the separate, per-target `rowActions`
+ * check below (same "does X exist at all" vs. "for this one target" split as
+ * `canTrackOthers`/`trackableRoleIds` on the Tracking page).
+ */
+export function canManageMemberships(permissions: readonly Permission[]): boolean {
+  const editScope = widestScope(permissions, 'membership', 'edit')
+  const teamScope = widestScope(permissions, 'team_member', 'edit')
+  return (editScope !== null && editScope !== 'own') || (teamScope !== null && teamScope !== 'own')
 }
 
 /**
@@ -214,6 +255,54 @@ export function rowActions(
 }
 
 // ---------------------------------------------------------------------------
+// Tracking (§2A.6): own numbers, plus tracking someone below you
+// ---------------------------------------------------------------------------
+
+/**
+ * The functions the actor currently holds, deduplicated, for the Tracking page's
+ * function switcher (§2A.6). A position with no function (e.g. LCP/MCP hold the
+ * President function) still has one entry.
+ */
+export function distinctFunctions(actor: Actor): FunctionRef[] {
+  const seen = new Map<string, FunctionRef>()
+  for (const m of actor.memberships) {
+    if (m.function && !seen.has(m.function.key)) seen.set(m.function.key, m.function)
+  }
+  return [...seen.values()]
+}
+
+/**
+ * Whether "Track someone" should show at all (§2A.6): needs `kpi_record.edit` wider
+ * than `own`. Whether a SPECIFIC person may be tracked is a separate, per-person check
+ * (`canTrackPerson`), because scope and rank are checked per target, same as Extend
+ * term and Move to team.
+ */
+export function canTrackOthers(permissions: readonly Permission[]): boolean {
+  const scope = widestScope(permissions, 'kpi_record', 'edit')
+  return scope !== null && scope !== 'own'
+}
+
+/** The two-check rule (§3.4) applied to tracking one specific person's numbers. */
+function canTrackPerson(
+  actor: Actor,
+  permissions: readonly Permission[],
+  target: TargetRole,
+): boolean {
+  return canActOnTarget(actor, permissions, 'kpi_record', target)
+}
+
+/** Which of a member-row's position/function pairs the actor may track (§2A.6, §3.4). */
+export function trackableRoleIds(
+  actor: Actor,
+  permissions: readonly Permission[],
+  row: MemberSummaryRow,
+): string[] {
+  return row.roles
+    .filter((role) => canTrackPerson(actor, permissions, targetRoleOf(row, role)))
+    .map((role) => role.membershipId)
+}
+
+// ---------------------------------------------------------------------------
 // Adding a member: which LCs, positions and functions to offer (§2A.5, §3.4, §3.6)
 // ---------------------------------------------------------------------------
 
@@ -233,10 +322,39 @@ export function addableLcs(
   return lcs.filter((lc) => own.has(lc.id))
 }
 
-/** True when the actor's LC is fixed rather than chosen (everyone except MC, §2A.5). */
-export function isLcFixed(permissions: readonly Permission[]): boolean {
-  const scope = widestScope(permissions, 'membership', 'create')
-  return scope !== null && scope !== 'all'
+/**
+ * Teams offered for a given LC + function, once a team-holding position is chosen
+ * (§3.4, §3.6). A Team-Leader-scope adder never reaches this — `fixedTeam` already
+ * gives them their one team; this is for the broader scopes that get a genuine choice.
+ */
+export function addableTeams(
+  actor: Actor,
+  permissions: readonly Permission[],
+  teams: readonly Team[],
+  lc: Lc,
+  functionKey: string,
+): Team[] {
+  if (!addableLcs(actor, permissions, [lc]).length) return []
+  return teams.filter((t) => t.lcId === lc.id && t.functionKey === functionKey)
+}
+
+/**
+ * All of the actor's active memberships that tie with `actingMembership`'s own choice
+ * (same position, hence same rank and grants — the permission matrix is keyed by
+ * position). Usually one membership; more than one when the actor holds several of
+ * that same position (e.g. Team Leader of two teams) — Add-Member then asks which one
+ * they're adding under, instead of silently picking the first in array order.
+ */
+export function actingMembershipCandidates(actor: Actor): MembershipView[] {
+  const key = actingPosition(actor)?.key
+  return key === undefined ? [] : actor.memberships.filter((m) => m.position.key === key)
+}
+
+/** Narrows an actor to exactly one membership — the one they've explicitly chosen to
+ * act as (Add-Member's "Add as" picker). Every `addable*`/`fixedTeam` function then
+ * behaves as if that were the actor's only membership. */
+export function narrowToMembership(actor: Actor, membershipId: string): Actor {
+  return { personId: actor.personId, memberships: actor.memberships.filter((m) => m.id === membershipId) }
 }
 
 /**
@@ -259,7 +377,7 @@ export function addablePositions(
   return positions.filter(
     (p) =>
       p.level === lc.type &&
-      (p.rank < acting.rank || (acting.canAddSameRank && p.key === acting.key)),
+      (outranks(actor, p) || (acting.canAddSameRank && p.key === acting.key)),
   )
 }
 
@@ -273,10 +391,7 @@ export function fixedTeam(
 ): { team: { id: string; name: string }; functionKey: string | null } | null {
   if (widestScope(permissions, 'membership', 'create') !== 'team') return null
   const acting = actingMembership(actor)
-  const withTeam = actor.memberships.find(
-    (m) => m.team !== null && m.position.key === acting?.position.key,
-  )
-  return withTeam?.team ? { team: withTeam.team, functionKey: withTeam.function?.key ?? null } : null
+  return acting?.team ? { team: acting.team, functionKey: acting.function?.key ?? null } : null
 }
 
 /**
@@ -297,12 +412,32 @@ export function addableFunctions(
 }
 
 // ---------------------------------------------------------------------------
+// Data page scope tabs (§2A.7, §6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Which grouping tabs (Team / Function / LC / Australia-wide) to offer on the Data
+ * page. A grant at one scope already covers every NARROWER cut of the same data (a
+ * function's total is built from the teams inside it, §6 "computed by query"), so
+ * every scope up to and including the widest grant is safe to offer. This is a
+ * frontend assumption pending the real report design (spec §12 #18).
+ */
+export function availableDataScopes(permissions: readonly Permission[]): Scope[] {
+  const maxScope = widestScope(permissions, 'analytics_report', 'view')
+  if (maxScope === null) return []
+  const maxIndex = scopeRank(maxScope)
+  return (['team', 'function', 'lc', 'all'] as const).filter((s) => scopeRank(s) <= maxIndex)
+}
+
+// ---------------------------------------------------------------------------
 // Navigation and the homepage
 // ---------------------------------------------------------------------------
 
 export interface Gated {
-  /** Omit for pages every allocated person may open. */
-  requires?: { resource: string; action: Action }
+  /** Omit for pages every allocated person may open. `minScope` (optional) additionally
+   * requires the grant to reach at least that scope; default 'own' (any scope
+   * qualifies — same as before this field existed). */
+  requires?: { resource: string; action: Action; minScope?: Scope }
   /** False for pages planned but not built yet. Hidden until they exist. */
   built: boolean
 }
@@ -316,14 +451,15 @@ export function visibleNavItems<T extends Gated>(
   return items.filter(
     (item) =>
       (item.built || options.includeUnbuilt === true) &&
-      (item.requires === undefined || can(permissions, item.requires.resource, item.requires.action)),
+      (item.requires === undefined ||
+        hasMinScope(permissions, item.requires.resource, item.requires.action, item.requires.minScope ?? 'own')),
   )
 }
 
 /**
- * Which default chart the homepage shows, from the actor's highest position:
+ * Which default chart the homepage shows, from the acting membership's position:
  * Member/TL see a team chart, LCVP/LCP a function chart, MC positions all of Australia.
  */
-export function homeChartScope(actor: Actor): Position['homeChartScope'] {
-  return actingPosition(actor)?.homeChartScope ?? 'team'
+export function homeChartScope(acting: MembershipView | null): Position['homeChartScope'] {
+  return acting?.position.homeChartScope ?? 'team'
 }

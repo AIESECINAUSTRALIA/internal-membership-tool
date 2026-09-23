@@ -5,6 +5,7 @@ import 'dayjs/locale/en-au'
 import type { ReactNode } from 'react'
 
 import { ApiProvider } from './api/ApiContext'
+import { ReferenceDataProvider } from './api/ReferenceDataContext'
 import type { Api } from './api/types'
 import { AuthProvider } from './auth/AuthProvider'
 import { theme } from './theme/theme'
@@ -16,7 +17,9 @@ export function AppProviders({ api, children }: { api?: Api; children: ReactNode
       <CssBaseline />
       <LocalizationProvider dateAdapter={AdapterDayjs} adapterLocale="en-au">
         <ApiProvider api={api}>
-          <AuthProvider>{children}</AuthProvider>
+          <AuthProvider>
+            <ReferenceDataProvider>{children}</ReferenceDataProvider>
+          </AuthProvider>
         </ApiProvider>
       </LocalizationProvider>
     </ThemeProvider>

@@ -4,7 +4,7 @@
  */
 import dayjs from 'dayjs'
 
-import type { FunctionRef, IsoDate, Position, Scope } from '../api/types'
+import type { FunctionRef, IsoDate, MembershipView, Position, Scope, Team } from '../api/types'
 
 /** "Team Leader (TL)" -> "TL". "Member" -> "Member". Uses the bracketed short name if any. */
 export function shortLabel(label: string): string {
@@ -15,6 +15,18 @@ export function shortLabel(label: string): string {
 /** "TL – oGV": the position-function pair shown in tables (spec §2A.5). */
 export function roleLabel(position: Position, fn: FunctionRef | null): string {
   return fn ? `${shortLabel(position.label)} – ${shortLabel(fn.label)}` : shortLabel(position.label)
+}
+
+/** "TL – oGV · oGV Team A": disambiguates two memberships of the same position (the
+ * Add-Member "Add as" picker) by adding the team, or the LC when there's no team. */
+export function membershipLabel(m: MembershipView): string {
+  return `${roleLabel(m.position, m.function)} · ${m.team?.name ?? m.lc.name}`
+}
+
+/** "oGV Team A — led by Jamie Lee" / "oGV Team A — no leader assigned": the Add-Member
+ * team picker's option text. */
+export function teamOptionLabel(t: Team): string {
+  return `${t.name} — ${t.leader ? `led by ${t.leader.name}` : 'no leader assigned'}`
 }
 
 /** "temp_oGV" or "Member 1": first and last name joined, with no stray space if one is blank. */

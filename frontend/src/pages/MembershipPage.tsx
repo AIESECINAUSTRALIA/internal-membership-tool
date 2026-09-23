@@ -1,15 +1,18 @@
 import { Alert, Box, Button, Chip, InputAdornment, MenuItem, Snackbar, Stack, TextField, Typography } from '@mui/material'
 import { DataGrid, type GridColDef, type GridPaginationModel, type GridSortModel } from '@mui/x-data-grid'
+import ManageAccountsOutlined from '@mui/icons-material/ManageAccountsOutlined'
 import PersonAddAlt1Outlined from '@mui/icons-material/PersonAddAlt1Outlined'
 import SearchIcon from '@mui/icons-material/Search'
 import { useEffect, useMemo, useState } from 'react'
 
 import { useApi } from '../api/ApiContext'
-import type { MemberQuery, MemberSortField, MemberSummaryRow, Page, ReferenceData } from '../api/types'
+import { useReferenceData } from '../api/ReferenceDataContext'
+import type { MemberQuery, MemberSortField, MemberSummaryRow, Page } from '../api/types'
 import { useAuth } from '../auth/authContext'
-import { addableLcs, rowActions, widestScope } from '../auth/permissions'
+import { addableLcs, canManageMemberships, rowActions, widestScope } from '../auth/permissions'
 import { AddMemberDialog } from '../features/membership/AddMemberDialog'
 import { ManageMembershipDialog, type ManageKind } from '../features/membership/ManageMembershipDialog'
+import { ManageMembershipHub } from '../features/membership/ManageMembershipHub'
 import { MemberActionsMenu } from '../features/membership/MemberActionsMenu'
 import { roleLabel } from '../lib/labels'
 import { useDebounced } from '../lib/useDebounced'
@@ -25,7 +28,7 @@ export function MembershipPage() {
   const api = useApi()
   const { me, actor } = useAuth()
 
-  const [reference, setReference] = useState<ReferenceData | null>(null)
+  const { reference, invalidate: invalidateReference } = useReferenceData()
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounced(search)
   const [lcId, setLcId] = useState(ALL_LCS)
@@ -50,17 +53,8 @@ export function MembershipPage() {
 
   const [adding, setAdding] = useState(false)
   const [managing, setManaging] = useState<{ kind: ManageKind; row: MemberSummaryRow } | null>(null)
+  const [hubOpen, setHubOpen] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    api.getReferenceData().then((data) => {
-      if (!cancelled) setReference(data)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [api])
 
   useEffect(() => {
     let cancelled = false
@@ -75,6 +69,7 @@ export function MembershipPage() {
   if (!me || !actor) return null
 
   const canAdd = reference ? addableLcs(actor, me.permissions, reference.lcs).length > 0 : false
+  const canManage = canManageMemberships(me.permissions)
   const canPickLc = widestScope(me.permissions, 'membership', 'view') === 'all' // MC users (§2A.5)
   const actionsFor = (row: MemberSummaryRow) => rowActions(actor, me.permissions, row)
   const showActions = (result?.page.rows ?? []).some((row) => {
@@ -125,11 +120,18 @@ export function MembershipPage() {
             Current members and the positions they hold.
           </Typography>
         </div>
-        {canAdd && (
-          <Button variant="contained" startIcon={<PersonAddAlt1Outlined />} onClick={() => setAdding(true)}>
-            Add member
-          </Button>
-        )}
+        <Stack direction="row" sx={{ gap: 1.5 }}>
+          {canManage && (
+            <Button variant="outlined" startIcon={<ManageAccountsOutlined />} onClick={() => setHubOpen(true)}>
+              Manage membership
+            </Button>
+          )}
+          {canAdd && (
+            <Button variant="contained" startIcon={<PersonAddAlt1Outlined />} onClick={() => setAdding(true)}>
+              Add member
+            </Button>
+          )}
+        </Stack>
       </Stack>
 
       <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gap: 2 }}>
@@ -199,6 +201,7 @@ export function MembershipPage() {
             setAdding(false)
             setToast('Member added')
             setReloadCount((n) => n + 1)
+            invalidateReference() // a new membership can change who leads a team
           }}
         />
       )}
@@ -214,6 +217,25 @@ export function MembershipPage() {
             setManaging(null)
             setToast(message)
             setReloadCount((n) => n + 1)
+            invalidateReference() // extending/moving a membership can change who leads a team
+          }}
+        />
+      )}
+      {hubOpen && (
+        <ManageMembershipHub
+          actor={actor}
+          permissions={me.permissions}
+          canAddFunction={canAdd}
+          onClose={() => setHubOpen(false)}
+          onDone={(message) => {
+            setHubOpen(false)
+            setToast(message)
+            setReloadCount((n) => n + 1)
+            invalidateReference() // extending/moving a membership can change who leads a team
+          }}
+          onAddFunction={() => {
+            setHubOpen(false)
+            setAdding(true)
           }}
         />
       )}

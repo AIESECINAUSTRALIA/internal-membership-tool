@@ -20,14 +20,18 @@
 import dayjs from 'dayjs'
 
 import {
+  actingMembership,
   actorFromMe,
   addableFunctions,
   addableLcs,
   addablePositions,
+  addableTeams,
   canExtendTerm,
   canMoveToTeam,
   fixedTeam,
+  homeChartScope,
   isActive,
+  narrowToMembership,
   scopeCovers,
   widestScope,
   type Actor,
@@ -136,6 +140,19 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   }
   const personById = (id: string) => db.people.find((p) => p.id === id)
 
+  /** The longest-serving person currently holding `team_leader` for this team. Mock-only
+   * simplification: the real schema's `team.leader_membership_id` (docs/data-model.md)
+   * is a single explicit FK; this derives an equivalent from membership data since the
+   * mock seed can (rarely) have more than one active Team Leader per team. */
+  function resolveTeamLeader(teamId: string): { membershipId: string; name: string } | null {
+    const leader = db.memberships
+      .filter((m) => m.teamId === teamId && m.positionKey === 'team_leader' && isActive(m, today()))
+      .sort((a, b) => (a.startDate < b.startDate ? -1 : 1))[0]
+    if (!leader) return null
+    const person = personById(leader.personId)!
+    return { membershipId: leader.id, name: [person.firstName, person.lastName].filter(Boolean).join(' ') }
+  }
+
   function toView(m: DbMembership): MembershipView {
     return {
       id: m.id,
@@ -229,7 +246,8 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
     async getReferenceData(): Promise<ReferenceData> {
       await wait()
-      return { lcs: LCS, positions: POSITIONS, functions: FUNCTIONS, terms: buildTerms(today()) }
+      const teams = TEAMS.map((t) => ({ ...t, leader: resolveTeamLeader(t.id) }))
+      return { lcs: LCS, positions: POSITIONS, functions: FUNCTIONS, terms: buildTerms(today()), teams }
     },
 
     async listMembers(query: MemberQuery): Promise<Page<MemberSummaryRow>> {
@@ -299,7 +317,12 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
     async addMember(input: AddMemberInput): Promise<AddMemberResult> {
       await wait()
-      const { me, actor } = requireActor()
+      const { me, actor: fullActor } = requireActor()
+      // Re-derived server-side, never trusted from the client: which of the actor's own
+      // memberships this request is acting under (§3.4 — the hierarchy rule compares the
+      // specific membership, not just "the actor" in the abstract).
+      const chosenMembershipId = input.membershipId ?? actingMembership(fullActor)?.id
+      const actor = chosenMembershipId ? narrowToMembership(fullActor, chosenMembershipId) : fullActor
       const start = input.startDate
       const end = input.endDate
 
@@ -320,6 +343,18 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       }
       const fn = addableFunctions(actor, me.permissions, FUNCTIONS, pos).find((f) => f.key === input.functionKey)
       if (!fn) return reject("You can't add that function.")
+
+      // Team pinning (§3.4): a Team-Leader-scope adder is fixed to their own team;
+      // anyone broader picks one, re-validated here against the same options they saw.
+      const fixed = fixedTeam(actor, me.permissions)
+      let teamId: string | null = null
+      if (fixed) {
+        teamId = fixed.team.id
+      } else if (pos.holdsTeam) {
+        const chosenTeam = addableTeams(actor, me.permissions, TEAMS, lc, fn.key).find((t) => t.id === input.teamId)
+        if (!chosenTeam) return reject('Choose a team.')
+        teamId = chosenTeam.id
+      }
 
       const email = input.email.trim().toLowerCase()
       const existing = db.people.find((p) => p.email === email)
@@ -363,8 +398,6 @@ export function createMockApi(options: MockApiOptions = {}): Api {
           customFields: {},
         })
       }
-      // A Team Leader's additions go into their own team (§3.4).
-      const team = fixedTeam(actor, me.permissions)
       db.memberships.push({
         id: `m-${nextId++}`,
         personId,
@@ -374,7 +407,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         termId: input.termId ?? '',
         startDate: start,
         endDate: end,
-        teamId: team?.team.id ?? null,
+        teamId,
       })
       return { status: 'created' }
     },
@@ -440,11 +473,8 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     async getHomeChart(): Promise<HomeChart> {
       await wait()
       const { actor } = requireActor()
-      const acting = actor.memberships.reduce<MembershipView | null>(
-        (best, m) => (best === null || m.position.rank > best.position.rank ? m : best),
-        null,
-      )
-      const scope = acting?.position.homeChartScope ?? 'team'
+      const acting = actingMembership(actor)
+      const scope = homeChartScope(acting)
       const where =
         scope === 'team' ? (acting?.team?.name ?? 'your team')
         : scope === 'function' ? (acting?.function ? shortLabel(acting.function.label) : 'your function')

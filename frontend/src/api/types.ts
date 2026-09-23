@@ -41,6 +41,8 @@ export interface Position {
   presidential: boolean
   /** Frontend assumption: which default chart the homepage shows (spec §12 #12). */
   homeChartScope: ChartScope
+  /** True when a person in this position belongs to a specific team (§3.4). */
+  holdsTeam: boolean
 }
 
 export interface FunctionDef {
@@ -76,6 +78,10 @@ export interface Team {
   name: string
   lcId: string
   functionKey: string
+  /** Who currently leads it, resolved for display where the mock/backend resolves it
+   * (Add-Member's team picker) — undefined where not resolved (e.g. Move-to-team's
+   * `teamOptions`, which doesn't need it). Null means no leader is currently assigned. */
+  leader?: { membershipId: string; name: string } | null
 }
 
 /** Everything the Add member form needs to build its choices. */
@@ -84,6 +90,7 @@ export interface ReferenceData {
   positions: Position[]
   functions: FunctionDef[]
   terms: Term[]
+  teams: Team[]
 }
 
 // ---------------------------------------------------------------------------
@@ -195,9 +202,16 @@ export interface AddMemberInput {
   /** Only needed when no one has this email yet. */
   firstName?: string
   lastName?: string
+  /** Which of the actor's own active memberships this request is acting under. Omit to
+   * use their default (`actingMembership`'s own choice) — only meaningful when the
+   * actor holds more than one membership of the same position. */
+  membershipId?: string
   lcId: string
   positionKey: string
   functionKey: string
+  /** Required when the chosen position holds a team (`Position.holdsTeam`) and the
+   * actor isn't already fixed to one team-scope team. */
+  teamId?: string
   startDate: IsoDate
   endDate: IsoDate
   termId?: string
@@ -215,7 +229,7 @@ export type AddMemberResult =
 
 export type ActionResult = { status: 'ok' } | { status: 'rejected'; message: string }
 
-/** What the Move to team and Extend term dialogs show about one membership. */
+/** What the Manage membership panel shows about one membership (team + term). */
 export interface MembershipDetail {
   membershipId: string
   personName: string

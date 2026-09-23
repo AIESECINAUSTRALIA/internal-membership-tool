@@ -17,7 +17,7 @@ frontend/src/
   layout/               App shell (sidebar + header) and the sign-in frame.
   pages/                One file per page.
   features/membership/  The Add member, Extend term and Move to team dialogs.
-  components/           Small shared pieces (confirm dialog, "not built yet" page).
+  components/           Small shared pieces (confirm dialog, "not built yet" page/dialog).
   assets/               Logos (copied from frontend/images with kebab-case names).
   test/                 vitest.
 ```
@@ -103,15 +103,40 @@ These are in the mock and the frontend, but **not in the spec or schema yet**:
 - **Future-dated memberships** don't appear on the Membership page (it lists current
   members only, §2A.5). A person added with a start date in the future shows up on that date.
 
-## Placeholder pages
+## Tracking, Data, Settings: scaffolds, not placeholders
 
-Tracking, Data and Settings exist as placeholders (`components/PlannedPage.tsx`). Each says
-what the page will do, taken from spec §2A.6 to §2A.8. Their menu items and routes are
-gated by the same permission as the real pages will be (`navigation/navConfig.ts` and
-`App.tsx`). Settings also shows a Functions block to positions with `manage` on `function`
-(MC), as a stand-in for that screen. To build a page, replace the placeholder's body and
-keep its route and permission. `built: false` in `navConfig.ts` hides an item whose page
-doesn't exist yet.
+These three pages have their real layout and controls (spec §2A.6–§2A.8), wired to
+real mock data wherever the data already exists. What they do NOT have is the KPI
+catalog (spec §4.3 TODO), so anywhere a real number would appear, the page shows the
+table or chart in its intended shape but empty — "No data exists", the same fixed
+wording used everywhere else (spec §2A).
+
+- **Tracking** (`pages/TrackingPage.tsx`): a function switcher (`ToggleButtonGroup`)
+  for anyone who holds more than one function at once (`auth/permissions.ts`,
+  `distinctFunctions`). "My tracking" always shows, empty. "Track someone" shows only
+  with `canTrackOthers` (`kpi_record.edit` wider than `own`), searches with the
+  existing `listMembers`, and narrows results to people the actor may track with
+  `trackableRoleIds` — the same two-check hierarchy rule as Extend term and Move to
+  team, now generalised in `permissions.ts` as `canActOnTarget`. **Simplification**:
+  `listMembers` is scoped by `membership.view`, not `kpi_record`, so the search
+  candidates are an approximation until a KPI-scoped search exists on the real
+  backend.
+- **Data** (`pages/DataPage.tsx`): scope tabs (Team/Function/LC/Australia-wide) from
+  `availableDataScopes`, an LC picker for `all`-scope viewers, a start/end
+  `DatePicker` pair (§6), an empty summary table and an empty chart panel, and a
+  "Build a report" button that opens `NotBuiltYetDialog` (§2A.7's report generator,
+  kept separate from the official NAMs/SONA/MTR reports, §7). **Assumption**:
+  `availableDataScopes` offers every scope up to the widest grant, on the reasoning
+  that a wider grant already covers every narrower cut of the same data (spec §12
+  #18 is still open on the real report design).
+- **Settings** (`pages/SettingsPage.tsx`): the Functions block now reads the real
+  function list from `getReferenceData()` and lists each one with its active state.
+  Add, Rename and Deactivate all open `NotBuiltYetDialog` rather than doing
+  anything — there is no function-mutation endpoint yet.
+
+Their menu items and routes are gated by the same permission the real pages will use
+(`navigation/navConfig.ts` and `App.tsx`). `built: false` in `navConfig.ts` hides an
+item whose page doesn't exist at all yet.
 
 ## Profile custom fields
 
@@ -123,16 +148,25 @@ date, boolean and enum are supported).
 ## Not built yet
 
 The Admin console (own sign-in and address, spec §2A.2). The MC/admin permissions table on
-the Membership page (spec §2A.5, who may view it is open, §12 #19). The real charts on the
-homepage and the real content of Tracking, Data and Settings: the KPI catalog is still a
-spec TODO (§4.3).
+the Membership page (spec §2A.5, who may view it is open, §12 #19). Anywhere real KPI data
+would appear (the homepage chart, Tracking, the Data summary/chart/report generator, and
+Settings' Add/Rename/Deactivate function actions): the KPI catalog is still a spec TODO
+(§4.3), and function mutations have no endpoint yet, so these show real layout with "No
+data exists" or a "Not built yet" dialog rather than working.
 
 ## Checks that were run
+
+Slice 1 (theme, app shell, sign-in, Home, Profile, Membership summary):
 
 - `npx tsc -b`, `npx eslint .`, `npx vitest run`, `npm run build`.
 - axe-core (WCAG 2.0/2.1/2.2 A and AA rules) on every page and the Add member dialog: no violations.
 - Keyboard: the skip link, the focus ring on buttons, links and grid headers.
   (axe cannot judge focus visibility, so this was checked by eye.)
+
+Tracking/Data/Settings scaffolds: `npx tsc -b`, `npx eslint .`, `npx vitest run` (71
+tests) and `npm run build` all pass. **Not yet done for these three pages**: a live
+axe-core pass and an eyeballed keyboard check, the way slice 1 got them. Run those
+before treating the scaffolds as finished, the same way slice 1 was checked.
 
 Known gap: the production bundle is about 1.2 MB (375 kB gzipped) in one chunk, mostly MUI
 and the Data Grid. Fine for an internal tool. Route-level code splitting is the fix if it

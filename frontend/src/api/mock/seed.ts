@@ -27,13 +27,13 @@ import type {
 
 /** Spec §2 "Positions". A higher rank is a higher position. */
 export const POSITIONS: Position[] = [
-  { key: 'member', label: 'Member', level: 'lc', rank: 1, canAddSameRank: false, presidential: false, homeChartScope: 'team' },
-  { key: 'team_leader', label: 'Team Leader (TL)', level: 'lc', rank: 2, canAddSameRank: false, presidential: false, homeChartScope: 'team' },
-  { key: 'lcvp', label: 'LC Vice President (LCVP)', level: 'lc', rank: 3, canAddSameRank: false, presidential: false, homeChartScope: 'function' },
-  { key: 'lcp', label: 'LC President (LCP)', level: 'lc', rank: 4, canAddSameRank: true, presidential: true, homeChartScope: 'function' },
-  { key: 'mcd', label: 'MC Director (MCD)', level: 'mc', rank: 5, canAddSameRank: false, presidential: false, homeChartScope: 'all' },
-  { key: 'mcvp', label: 'MC Vice President (MCVP)', level: 'mc', rank: 6, canAddSameRank: false, presidential: false, homeChartScope: 'all' },
-  { key: 'mcp', label: 'MC President (MCP)', level: 'mc', rank: 7, canAddSameRank: true, presidential: true, homeChartScope: 'all' },
+  { key: 'member', label: 'Member', level: 'lc', rank: 1, canAddSameRank: false, presidential: false, homeChartScope: 'team', holdsTeam: true },
+  { key: 'team_leader', label: 'Team Leader (TL)', level: 'lc', rank: 2, canAddSameRank: false, presidential: false, homeChartScope: 'team', holdsTeam: true },
+  { key: 'lcvp', label: 'LC Vice President (LCVP)', level: 'lc', rank: 3, canAddSameRank: false, presidential: false, homeChartScope: 'function', holdsTeam: false },
+  { key: 'lcp', label: 'LC President (LCP)', level: 'lc', rank: 4, canAddSameRank: true, presidential: true, homeChartScope: 'function', holdsTeam: false },
+  { key: 'mcd', label: 'MC Director (MCD)', level: 'mc', rank: 5, canAddSameRank: false, presidential: false, homeChartScope: 'all', holdsTeam: false },
+  { key: 'mcvp', label: 'MC Vice President (MCVP)', level: 'mc', rank: 6, canAddSameRank: false, presidential: false, homeChartScope: 'all', holdsTeam: false },
+  { key: 'mcp', label: 'MC President (MCP)', level: 'mc', rank: 7, canAddSameRank: true, presidential: true, homeChartScope: 'all', holdsTeam: false },
 ]
 
 /** Spec §2 "Functions". A flat list: functions have no rank. */
@@ -194,13 +194,14 @@ export interface MockDb {
 }
 
 /** Persona keys: dev-only shortcuts to sign in as a given role (see `api/index.ts`). */
-export type PersonaKey = 'lcvp' | 'lcp' | 'tl' | 'member' | 'mcvp' | 'unallocated'
+export type PersonaKey = 'lcvp' | 'lcp' | 'tl' | 'dualTl' | 'member' | 'mcvp' | 'unallocated'
 
 /** Persona -> person id. The default persona (LCVP) shows every action. */
 export const PERSONAS: Record<PersonaKey, string> = {
   lcvp: 'p-jordan',
   lcp: 'p-morgan',
   tl: 'p-ava',
+  dualTl: 'p-drew',
   member: 'p-sam',
   mcvp: 'p-riley',
   unallocated: 'p-casey',
@@ -289,6 +290,11 @@ export function buildSeed(today: IsoDate): MockDb {
   person('p-priya')
   membership('p-priya', 'lc-usyd', 'team_leader', 'ogta', 'team-usyd-ogta-a')
   membership('p-priya', 'lc-usyd', 'member', 'bnm', 'team-usyd-bnm-a')
+
+  // Team Leader of two teams at once — exercises Add-Member's "Add as" picker (§3.4).
+  person('p-drew')
+  membership('p-drew', 'lc-usyd', 'team_leader', 'ogv', 'team-usyd-ogv-a')
+  membership('p-drew', 'lc-usyd', 'team_leader', 'ogta', 'team-usyd-ogta-a')
 
   // --- Other exec and MC ---------------------------------------------------
   person('p-lcvp-bnm')

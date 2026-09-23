@@ -6,10 +6,10 @@
  */
 import { Navigate, Outlet } from 'react-router-dom'
 
-import type { Action } from '../api/types'
+import type { Action, Scope } from '../api/types'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { useAuth } from './authContext'
-import { can } from './permissions'
+import { hasMinScope } from './permissions'
 
 /** Signed in AND allocated. Otherwise: sign in, or the not-allocated page. */
 export function RequireAllocated() {
@@ -37,17 +37,21 @@ export function RequireUnallocated() {
   return <Outlet />
 }
 
-/** A page that needs one permission. Without it, the person sees "not available". */
+/** A page that needs one permission, at least `minScope` wide (default 'own', i.e. any
+ * scope qualifies — unchanged from before this prop existed). Without it, the person
+ * sees "not available". */
 export function RequirePermission({
   resource,
   action,
+  minScope = 'own',
   fallback,
 }: {
   resource: string
   action: Action
+  minScope?: Scope
   fallback: React.ReactNode
 }) {
   const { me } = useAuth()
-  if (!me || !can(me.permissions, resource, action)) return <>{fallback}</>
+  if (!me || !hasMinScope(me.permissions, resource, action, minScope)) return <>{fallback}</>
   return <Outlet />
 }
