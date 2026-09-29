@@ -55,11 +55,12 @@ and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
 
 The backend serves `GET /` and `GET /healthz`, and has the initial relational schema
 (`lc`, `term`, `position`, `function`, `person`, `membership`, `team`, `team_member`),
-a repository layer and baseline seeds — see `docs/data-model.md`. The frontend has its
+the append-only `audit_log` with its `record_audit` helper, a repository layer and
+baseline seeds — see `docs/data-model.md`. The frontend has its
 first slice (theme, app shell, sign-in, Home, Profile, Membership summary) running on a
 mock API, plus real-layout scaffolds for Tracking, Data and Settings (no KPI data yet) —
 see `docs/frontend.md`. **Not built yet**: the real permission matrix and auth
-resolution, the `attribute` / `kpi_record` / `audit_log` tables, any backend feature API,
+resolution, the `attribute` / `kpi_record` tables, any backend feature API,
 the Admin console, dashboards, reporting — see `docs/membership-tool-requirements-spec.md`
 for what these entail.
 
@@ -70,7 +71,7 @@ spec") lists what to change. Still blocked on the spec's `TODO:`s: the KPI catal
 and the report templates.
 
 The next tranche of backend work — schema alignment, the permission matrix, the
-`attribute` / `kpi_record` / `audit_log` tables, and real auth — is ticketed in
+`attribute` / `kpi_record` tables, and real auth — is ticketed in
 `ticket.md` (repo root). It's a working allocation list, not a permanent roadmap:
 update or clear it as tickets land.
 

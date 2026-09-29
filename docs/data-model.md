@@ -1,7 +1,8 @@
 # Data model
 
 Explains the tables introduced in the initial schema migration
-(`backend/migrations/versions/0b11f06365cd_initial_schema.py`), for a reader
+(`backend/migrations/versions/0b11f06365cd_initial_schema.py`) and those added
+since (each section names its migration), for a reader
 with no prior context. See `docs/membership-tool-requirements-spec.md` §4.1
 for the source requirements — this doc explains the *implementation*, the
 spec explains the *why* at a product level.
@@ -13,6 +14,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `org.py` | `lc`, `term`, `position`, `function` |
 | `person.py` | `person` |
 | `membership.py` | `membership`, `team`, `team_member` |
+| `privacy.py` | `audit_log` (later also `deletion_request`) |
 
 This grouping isn't enforced by anything — it's a convention matching the
 spec's own section breakdown (org-structural lookups vs. the person record
@@ -128,6 +130,64 @@ Join table between `membership` and `team`. Time-scoped the same way as
 `membership` (`start_date`/`end_date`, no in-place mutation) so team history
 is preserved the same way membership history is.
 
+### `audit_log`
+
+Added by `backend/migrations/versions/4566b47c3298_add_audit_log.py`. One row
+per privacy/config action or sign-in (spec §8.4): who acted
+(`actor_membership_id`, or `actor_person_id` for sign-ins, which happen
+before a membership is chosen; both null for `system`), what they did
+(`action`, e.g. `kpi_record.edit`), to what (`resource_type`, `resource_id`),
+a one-line `summary`, an optional JSON `diff` of before/after, and
+`created_at`.
+
+**Writing to it.** Always call `app.core.audit.record_audit(session, ...)`.
+It adds the entry to the caller's session without committing, so the entry
+is saved if and only if the change it describes is saved. `diff` must never
+contain personal data. Entries can't be edited or deleted, so a leak there
+is permanent.
+
+**No foreign keys on the actor columns.** Spec §8.3 says that when a person
+is hard-deleted, the log is kept and its actor ids are left dangling on
+purpose. A foreign key would either block that delete, or (with
+`ON DELETE SET NULL`) try to update `audit_log`, which the database rejects
+(see below).
+
+**Append-only, enforced by the database.** The migration installs two
+triggers that call `audit_log_block_mutation()`, a function that only ever
+raises an error:
+
+- `audit_log_no_update_or_delete`: `BEFORE UPDATE OR DELETE`, per row.
+- `audit_log_no_truncate`: `BEFORE TRUNCATE`, per statement. Row-level
+  triggers don't fire on `TRUNCATE`, so without this one the whole log could
+  be emptied without any error.
+
+Both triggers are set to `ENABLE ALWAYS`. Without that, a session could run
+`SET session_replication_role = replica`, which normally switches triggers
+off, and then edit the log with no schema change at all.
+
+`INSERT` and `SELECT` are unaffected. `backend/tests/test_audit_log.py`
+attempts each blocked statement with raw SQL and asserts it's rejected.
+
+**Why a trigger and not `GRANT`/`REVOKE`.** The textbook approach is to give
+the app a login role with only `INSERT`/`SELECT` on this table. That does
+nothing here, because the app connects as the **owner** of the tables (the
+`POSTGRES_USER` in `DATABASE_URL`). In local Docker and CI, that user is
+also a **superuser**. Postgres never applies privilege checks to superusers,
+and an owner can always grant privileges back to itself. A trigger fires for
+every role, owner and superuser included. It lives entirely in one
+migration, so there's no change to `DATABASE_URL`, Docker Compose, CI or the
+hosted database's role setup.
+
+**What it doesn't stop.** Someone with DDL rights (the owner) can still
+`DROP TRIGGER`, `ALTER TABLE ... DISABLE TRIGGER` or `DROP TABLE`, and a
+migration downgrade past this revision drops the table, taking the log with it.
+That can't happen by accident: it's a deliberate schema change and would have
+to go through a migration and code review. If stronger protection is ever
+needed, the next step is a separate least-privilege login role for the app
+(no DDL, only `INSERT`/`SELECT` here), with the owner role reserved for
+migrations. That changes how every environment connects, so it's a
+deploy-time hardening task, not part of this table.
+
 ## Foreign keys and what deleting protects against
 
 None of the foreign keys in this migration cascade on delete. Concretely,
@@ -179,9 +239,10 @@ Two things to watch when fixing the seeds:
 - `lc.type` is stored as `'LC'` / `'MC'` (uppercase). The spec's lowercase
   `lc` / `mc` is informal wording, so keep the implemented values.
 
-The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record`,
-`audit_log` and `deletion_request` tables are not built yet. Their model files
-under `backend/app/models/` are empty stubs. Build them to the spec directly.
+The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record` and
+`deletion_request` tables are not built yet. Their model files under
+`backend/app/models/` are empty stubs (`deletion_request` goes in `privacy.py`,
+next to `audit_log`). Build them to the spec directly.
 
 ## Repository layer
 
