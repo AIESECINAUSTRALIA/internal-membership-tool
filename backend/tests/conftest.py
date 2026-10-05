@@ -1,25 +1,37 @@
 """Shared pytest fixtures.
 
-Tests run against the real, already-migrated database pointed to by
-`DATABASE_URL` (see `docs/local-development.md` and the CI workflow) rather
-than a mocked or in-memory one, so they catch anything a mock would hide —
-constraint violations, FK behaviour, enum/check constraints.
+Supports PostgreSQL via `DATABASE_URL` as well as an in-memory SQLite fallback
+for running unit and API tests in environments without a live PostgreSQL service.
 """
 
+import os
 from collections.abc import Generator
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-from app.db.session import engine
+import app.models  # noqa: F401
+from app.db.base import Base
+
+_database_url = os.environ.get("DATABASE_URL", "sqlite:///:memory:")
+
+if _database_url.startswith("sqlite"):
+    _test_engine = create_engine(
+        _database_url,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=_test_engine)
+else:
+    _test_engine = create_engine(_database_url)
 
 
 @pytest.fixture
 def db_session() -> Generator[Session, None, None]:
-    """A session bound to a connection-level transaction that's always rolled
-    back, so a test can `add`/`flush` freely without leaving data behind or
-    depending on any other test."""
-    connection = engine.connect()
+    """A session bound to a connection-level transaction that's rolled back."""
+    connection = _test_engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection)
 

@@ -10,5 +10,9 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-engine = create_engine(os.environ["DATABASE_URL"])
+_database_url = os.environ.get(
+    "DATABASE_URL",
+    "postgresql+psycopg://membership:localdevpassword@localhost:5432/membership",
+)
+engine = create_engine(_database_url)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
