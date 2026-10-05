@@ -29,6 +29,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+# B008 is FastAPI's standard Depends() pattern in endpoint parameter defaults
+ignore = ["B008"]
 
 [tool.mypy]
 python_version = "3.12"
