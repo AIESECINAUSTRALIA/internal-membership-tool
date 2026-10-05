@@ -54,11 +54,23 @@ describe('admin console guards', () => {
     expect(nav).not.toHaveTextContent('Permission matrix')
   })
 
-  it('never shows a link to the admin console from the main app', async () => {
-    await renderApp('mcvp', '/', true)
+  it('never puts an admin link in the main sidebar, or in the profile menu for a non-admin', async () => {
+    await renderApp('lcvp', '/', true)
     const nav = await screen.findByRole('navigation', { name: 'Main' })
     expect(nav).not.toHaveTextContent('Admin')
-    expect(screen.queryByRole('link', { name: /admin/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open profile menu' }))
+    expect(screen.queryByRole('menuitem', { name: 'Admin console' })).not.toBeInTheDocument()
+  })
+
+  it('shows an "Admin console" link in the profile menu, only for someone holding admin_console', async () => {
+    await renderApp('mcvp', '/', true)
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    expect(nav).not.toHaveTextContent('Admin') // still never in the sidebar itself
+    fireEvent.click(screen.getByRole('button', { name: 'Open profile menu' }))
+    const link = screen.getByRole('menuitem', { name: 'Admin console' })
+    expect(link).toHaveAttribute('href', '/admin')
+    fireEvent.click(link)
+    expect(await screen.findByRole('heading', { name: 'LCs' })).toBeInTheDocument()
   })
 })
 
