@@ -14,11 +14,11 @@ from typing import Any
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models.attribute import Attribute, AttributeAppliesTo
+from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.kpi import KpiRecord, KpiSource
 from app.models.membership import Membership, TeamMember
 from app.models.org import Function
-from app.repositories.attribute import AttributeValidationError
+from app.repositories.attribute import AttributeValidationError, validate_and_coerce
 
 
 def _resolve_team_id(session: Session, membership_id: int, as_of: date) -> int | None:
@@ -33,18 +33,6 @@ def _resolve_team_id(session: Session, membership_id: int, as_of: date) -> int |
         or_(TeamMember.end_date.is_(None), TeamMember.end_date >= as_of),
     )
     return session.execute(stmt).scalars().first()
-
-
-def _validate_value(attribute: Attribute, value_number: float) -> None:
-    rules = attribute.validation or {}
-    if "min" in rules and value_number < rules["min"]:  # type: ignore[operator]
-        raise AttributeValidationError(
-            f"{attribute.key}: {value_number} is below the minimum {rules['min']}"
-        )
-    if "max" in rules and value_number > rules["max"]:  # type: ignore[operator]
-        raise AttributeValidationError(
-            f"{attribute.key}: {value_number} is above the maximum {rules['max']}"
-        )
 
 
 def record_kpi(
@@ -69,7 +57,15 @@ def record_kpi(
         raise AttributeValidationError(
             f"{attribute.key} is not a KPI attribute (applies_to={attribute.applies_to})"
         )
-    _validate_value(attribute, value_number)
+    # kpi_record only has value_number, so a KPI must be numeric.
+    if attribute.data_type != AttributeDataType.NUMBER:
+        raise AttributeValidationError(
+            f"{attribute.key}: KPI attributes must have data_type 'number', "
+            f"not {attribute.data_type.value!r}"
+        )
+    # Shared with attribute_value writes; the returned column mapping isn't
+    # needed here, only the type check and min/max rules (raises on failure).
+    validate_and_coerce(attribute, value_number)
 
     record = KpiRecord(
         attribute_id=attribute.id,

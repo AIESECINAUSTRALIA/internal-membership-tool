@@ -8,6 +8,7 @@ can't express it. This module is the only place that should write an
 rather than constructing rows directly.
 """
 
+import math
 import re
 from datetime import UTC, date, datetime
 
@@ -47,6 +48,9 @@ def _type_check(attribute: Attribute, raw_value: object) -> dict[str, object | N
             raise AttributeValidationError(f"{attribute.key}: expected a number, got {raw_value!r}")
         if not isinstance(raw_value, int | float):
             raise AttributeValidationError(f"{attribute.key}: expected a number, got {raw_value!r}")
+        # NaN compares False against everything, so it would slip past min/max.
+        if not math.isfinite(raw_value):
+            raise AttributeValidationError(f"{attribute.key}: {raw_value!r} is not a finite number")
         columns["value_number"] = float(raw_value)
     elif attribute.data_type == AttributeDataType.DATE:
         if isinstance(raw_value, datetime):
