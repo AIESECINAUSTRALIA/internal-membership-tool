@@ -67,7 +67,7 @@ def make_person(
     session: Session,
     *,
     full_name: str = "Ada Lovelace",
-    email: str = "ada@aiesec.net",
+    email: str = "test_ada@aiesec.net",
 ) -> Person:
     person = Person(full_name=full_name, aiesec_email=email, join_date=YEAR_AGO)
     session.add(person)
@@ -137,7 +137,7 @@ def make_attribute(
 def make_kpi_attribute(
     session: Session,
     *,
-    key: str = "ol_signups",
+    key: str = "test_ol_signups",
     minimum: float = 0,
 ) -> Attribute:
     attribute = Attribute(

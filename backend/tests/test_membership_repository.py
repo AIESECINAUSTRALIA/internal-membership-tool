@@ -85,7 +85,7 @@ def test_does_not_return_another_persons_membership(db_session: Session) -> None
     position = make_position(db_session)
     term = make_term(db_session)
     person = make_person(db_session)
-    other_person = make_person(db_session, email="grace@aiesec.net")
+    other_person = make_person(db_session, email="test_grace@aiesec.net")
     make_membership(db_session, person=other_person, lc=lc, position=position, term=term)
 
     result = get_active_memberships_for_person(db_session, person.id, as_of=TODAY)

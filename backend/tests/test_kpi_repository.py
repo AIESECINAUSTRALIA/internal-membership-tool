@@ -3,13 +3,13 @@ from datetime import date
 import pytest
 from sqlalchemy.orm import Session
 
-from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.kpi import KpiSource
 from app.models.membership import Team, TeamMember
 from app.repositories.attribute import AttributeValidationError
 from app.repositories.kpi import record_kpi, sum_by_function
 from tests.helpers import (
     YEAR_AGO,
+    make_attribute,
     make_function,
     make_kpi_attribute,
     make_lc,
@@ -88,15 +88,11 @@ def test_record_kpi_rejects_non_kpi_attribute(db_session: Session) -> None:
     membership = make_membership(
         db_session, person=person, lc=lc, position=position, term=term, function=function
     )
-    not_a_kpi = Attribute(
-        key="shirt_size",
+    not_a_kpi = make_attribute(
+        db_session,
+        key="test_shirt_size",
         label="Shirt size",
-        applies_to=AttributeAppliesTo.PERSON,
-        data_type=AttributeDataType.TEXT,
-        active=True,
     )
-    db_session.add(not_a_kpi)
-    db_session.flush()
 
     with pytest.raises(AttributeValidationError):
         record_kpi(
@@ -141,8 +137,8 @@ def test_sum_by_function_returns_correct_totals_within_range(db_session: Session
     position = make_position(db_session)
     bd = make_function(db_session, key="test_bd", label="Test BD")
     mkt = make_function(db_session, key="test_mkt", label="Test MKT")
-    bd_person = make_person(db_session, email="bd@aiesec.net")
-    mkt_person = make_person(db_session, email="mkt@aiesec.net")
+    bd_person = make_person(db_session, email="test_bd@aiesec.net")
+    mkt_person = make_person(db_session, email="test_mkt@aiesec.net")
     bd_member = make_membership(
         db_session, person=bd_person, lc=lc, position=position, term=term, function=bd
     )
