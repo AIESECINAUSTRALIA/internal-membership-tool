@@ -26,11 +26,20 @@ def _resolve_team_id(session: Session, membership_id: int, as_of: date) -> int |
     snapshot taken once at write time (spec §4.3) — a later team move does
     not rewrite past `kpi_record` rows, matching the append-only history
     convention `membership`/`team_member` already use. None if the member
-    wasn't on a team as of that date."""
-    stmt = select(TeamMember.team_id).where(
-        TeamMember.membership_id == membership_id,
-        TeamMember.start_date <= as_of,
-        or_(TeamMember.end_date.is_(None), TeamMember.end_date >= as_of),
+    wasn't on a team as of that date.
+
+    `end_date` is inclusive, so on a handoff day (old team ends the same day
+    the new one starts) two rows match. The most recently started team wins;
+    `id` breaks any remaining tie, so the result never depends on the order
+    Postgres happens to return rows in."""
+    stmt = (
+        select(TeamMember.team_id)
+        .where(
+            TeamMember.membership_id == membership_id,
+            TeamMember.start_date <= as_of,
+            or_(TeamMember.end_date.is_(None), TeamMember.end_date >= as_of),
+        )
+        .order_by(TeamMember.start_date.desc(), TeamMember.id.desc())
     )
     return session.execute(stmt).scalars().first()
 

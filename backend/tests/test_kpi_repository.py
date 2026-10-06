@@ -79,6 +79,55 @@ def test_record_kpi_resolves_team_id_as_of_period_start(db_session: Session) -> 
     assert record.team_id == team.id
 
 
+def test_record_kpi_on_team_handoff_day_picks_the_new_team(db_session: Session) -> None:
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
+    team_a = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name="BD Team A")
+    team_b = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name="BD Team B")
+    db_session.add_all([team_a, team_b])
+    db_session.flush()
+    # Team A is inserted first, so without an ORDER BY Postgres would most
+    # likely return it first — the test would fail on the old `.first()`.
+    db_session.add(
+        TeamMember(
+            team_id=team_a.id,
+            membership_id=membership.id,
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 3, 1),
+        )
+    )
+    db_session.add(
+        TeamMember(
+            team_id=team_b.id,
+            membership_id=membership.id,
+            start_date=date(2026, 3, 1),
+            end_date=date(2026, 5, 1),
+        )
+    )
+    db_session.flush()
+    attribute = make_kpi_attribute(db_session)
+
+    # Mar 1 is both Team A's last day and Team B's first (end_date is inclusive).
+    record = record_kpi(
+        db_session,
+        attribute=attribute,
+        membership_id=membership.id,
+        value_number=3,
+        period_start=date(2026, 3, 1),
+        period_end=date(2026, 3, 31),
+        source=KpiSource.LEADER,
+        recorded_by_membership_id=membership.id,
+    )
+
+    assert record.team_id == team_b.id
+
+
 def test_record_kpi_rejects_non_kpi_attribute(db_session: Session) -> None:
     lc = make_lc(db_session)
     term = make_term(db_session)
