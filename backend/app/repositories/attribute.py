@@ -13,6 +13,7 @@ import re
 from datetime import UTC, date, datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.models.attribute import (
@@ -147,30 +148,33 @@ def set_attribute_value(
         )
 
     columns = validate_and_coerce(attribute, raw_value)
+    values = {
+        **columns,
+        "recorded_by": recorded_by_membership_id,
+        "recorded_at": datetime.now(UTC),
+    }
 
-    existing = session.execute(
-        select(AttributeValue).where(
-            AttributeValue.attribute_id == attribute.id,
-            AttributeValue.entity_type == entity_type,
-            AttributeValue.entity_id == entity_id,
-        )
-    ).scalar_one_or_none()
-
-    if existing is None:
-        existing = AttributeValue(
+    # One atomic INSERT ... ON CONFLICT DO UPDATE instead of SELECT-then-INSERT,
+    # which races: two concurrent first writes would both see "no row" and the
+    # second would hit the unique constraint.
+    stmt = (
+        insert(AttributeValue)
+        .values(
             attribute_id=attribute.id,
             entity_type=entity_type,
             entity_id=entity_id,
+            **values,
         )
-        session.add(existing)
-
-    for column, value in columns.items():
-        setattr(existing, column, value)
-    existing.recorded_by = recorded_by_membership_id
-    existing.recorded_at = datetime.now(UTC)
-
-    session.flush()
-    return existing
+        .on_conflict_do_update(
+            constraint="uq_attribute_value_entity_attribute",
+            set_=values,
+        )
+        .returning(AttributeValue)
+        # Refresh the object if this row is already loaded in the session —
+        # otherwise SQLAlchemy hands back the cached, pre-update copy.
+        .execution_options(populate_existing=True)
+    )
+    return session.execute(stmt).scalar_one()
 
 
 def get_attribute_value(
