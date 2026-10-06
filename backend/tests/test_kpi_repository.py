@@ -202,3 +202,52 @@ def test_sum_by_function_returns_correct_totals_within_range(db_session: Session
     }
 
     assert totals == {"test_bd": 15, "test_mkt": 7}
+
+
+def test_sum_by_function_includes_memberships_without_a_function(db_session: Session) -> None:
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    bd = make_function(db_session, key="test_bd", label="Test BD")
+    bd_person = make_person(db_session, email="test_bd@aiesec.net")
+    lcp_person = make_person(db_session, email="test_lcp@aiesec.net")
+    bd_member = make_membership(
+        db_session, person=bd_person, lc=lc, position=position, term=term, function=bd
+    )
+    # e.g. an LCP — not tied to any one function.
+    lcp_member = make_membership(db_session, person=lcp_person, lc=lc, position=position, term=term)
+    attribute = make_kpi_attribute(db_session)
+
+    record_kpi(
+        db_session,
+        attribute=attribute,
+        membership_id=bd_member.id,
+        value_number=10,
+        period_start=date(2026, 6, 1),
+        period_end=date(2026, 6, 30),
+        source=KpiSource.SELF,
+        recorded_by_membership_id=bd_member.id,
+    )
+    record_kpi(
+        db_session,
+        attribute=attribute,
+        membership_id=lcp_member.id,
+        value_number=5,
+        period_start=date(2026, 6, 1),
+        period_end=date(2026, 6, 30),
+        source=KpiSource.SELF,
+        recorded_by_membership_id=lcp_member.id,
+    )
+
+    rows = sum_by_function(
+        db_session,
+        lc_id=lc.id,
+        attribute_id=attribute.id,
+        period_start=date(2026, 6, 1),
+        period_end=date(2026, 6, 30),
+    )
+
+    assert {tuple(row) for row in rows} == {
+        ("test_bd", "Test BD", 10),
+        (None, None, 5),
+    }

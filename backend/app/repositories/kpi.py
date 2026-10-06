@@ -104,11 +104,17 @@ def sum_by_function(
 
     Returns `(function_key, function_label, total)` rows; a function with no
     matching records is simply absent, not returned with a zero total.
+
+    Records from memberships with no function (`function_id` is NULL, e.g.
+    LCP) are grouped into a single `(None, None, total)` row rather than
+    dropped, so the per-function totals always add up to the LC total.
     """
     stmt = (
         select(Function.key, Function.label, func.sum(KpiRecord.value_number))
         .join(Membership, Membership.id == KpiRecord.membership_id)
-        .join(Function, Function.id == Membership.function_id)
+        # Outer join: an inner join would silently drop records from
+        # memberships whose function_id is NULL.
+        .outerjoin(Function, Function.id == Membership.function_id)
         .where(
             Membership.lc_id == lc_id,
             KpiRecord.attribute_id == attribute_id,
