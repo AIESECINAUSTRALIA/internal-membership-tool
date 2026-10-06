@@ -137,6 +137,11 @@ def set_attribute_value(
     single-valued (spec §4.2), so calling this again for the same entity
     overwrites the existing row rather than inserting a duplicate.
     """
+    if attribute.applies_to.value != entity_type.value:
+        raise AttributeValidationError(
+            f"{attribute.key} applies to {attribute.applies_to.value!r}, not {entity_type.value!r}"
+        )
+
     columns = validate_and_coerce(attribute, raw_value)
 
     existing = session.execute(
