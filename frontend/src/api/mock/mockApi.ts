@@ -41,6 +41,8 @@ import type {
   ActionResult,
   AddMemberInput,
   AddMemberResult,
+  AdminPersonQuery,
+  AdminPersonRow,
   Api,
   CustomField,
   CustomFieldValue,
@@ -481,6 +483,37 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         : 'All LCs'
       // No KPI catalog yet (spec §4.3 TODO), so there is nothing to plot: "No data exists".
       return { scope, title: `Monthly activity, ${where}`, period: 'monthly', points: [] }
+    },
+
+    async listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>> {
+      await wait()
+      const { me } = requireActor()
+      // Admin-only, all-or-nothing scope (§2A.2): unlike the member list, there is no
+      // narrower cut to apply, so a missing grant simply returns nothing (deny by default).
+      if (widestScope(me.permissions, 'person', 'manage') === null) return { rows: [], total: 0 }
+
+      let rows: AdminPersonRow[] = db.people.map((p) => ({
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        email: p.email,
+        active: db.memberships.some((m) => m.personId === p.id && isActive(m, today())),
+      }))
+
+      const needle = query.search.trim().toLowerCase()
+      if (needle) {
+        rows = rows.filter((r) =>
+          [r.firstName, r.lastName, `${r.firstName} ${r.lastName}`, r.email].some((s) =>
+            s.toLowerCase().includes(needle),
+          ),
+        )
+      }
+
+      const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
+      rows.sort((a, b) => collator.compare(a.lastName, b.lastName) || collator.compare(a.firstName, b.firstName))
+
+      const start = query.page * query.pageSize
+      return { rows: rows.slice(start, start + query.pageSize), total: rows.length }
     },
   }
 }

@@ -4,11 +4,12 @@ import { useState } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 
 import { useAuth } from '../auth/authContext'
-import { actingMembership, can } from '../auth/permissions'
+import { actingMembership } from '../auth/permissions'
 import { fullName, roleLabel } from '../lib/labels'
-import { HEADER_HEIGHT } from './Sidebar'
+import { HEADER_HEIGHT } from '../layout/Sidebar'
 
-/** Where the signed-in person sits, e.g. "TL – oGV, USYD". */
+/** Where the signed-in admin sits, e.g. "MCVP – oGV, MC" — same context line as the
+ * main app's header, since it's the position that grants admin access. */
 function useContextLine(): string {
   const { actor } = useAuth()
   const acting = actor ? actingMembership(actor) : null
@@ -16,13 +17,12 @@ function useContextLine(): string {
 }
 
 /**
- * Slim header: a menu button on small screens, the person's context, and the profile
- * icon. The profile menu has Profile and Sign out (spec §2A, §2A.9), plus "Admin
- * console" for anyone holding `admin_console:view` — the ONLY link to it anywhere in
- * the main app (spec §2A.2: "a normal user never sees a link to it"), so it only
- * renders for people the permission matrix actually grants it to.
+ * Slim header for the Admin console — same shape as the main app's `Header` (menu
+ * button, context line, avatar with a dropdown menu), so switching between the two
+ * areas feels like the same product. The one difference: "Exit to main app" stands in
+ * for "Profile", which is a main-app page (spec §2A.9), not part of the console.
  */
-export function Header({ onMenuClick }: { onMenuClick: () => void }) {
+export function AdminHeader({ onMenuClick }: { onMenuClick: () => void }) {
   const { me, signOut } = useAuth()
   const navigate = useNavigate()
   const contextLine = useContextLine()
@@ -31,12 +31,11 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
   if (!me) return null
   const { firstName, lastName } = me.person
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase()
-  const showAdminLink = can(me.permissions, 'admin_console', 'view')
 
   const handleSignOut = async () => {
     setAnchor(null)
     await signOut()
-    navigate('/sign-in', { replace: true })
+    navigate('/admin/sign-in', { replace: true })
   }
 
   return (
@@ -56,11 +55,7 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
         borderColor: 'divider',
       }}
     >
-      <IconButton
-        aria-label="Open navigation menu"
-        onClick={onMenuClick}
-        sx={{ display: { md: 'none' } }}
-      >
+      <IconButton aria-label="Open navigation menu" onClick={onMenuClick} sx={{ display: { md: 'none' } }}>
         <MenuIcon />
       </IconButton>
       <Typography sx={{ display: { xs: 'none', sm: 'block' } }} color="text.secondary">
@@ -84,9 +79,7 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
         slotProps={{ paper: { sx: { minWidth: 240, mt: 1 } } }}
       >
         <Box sx={{ px: 2, py: 1.5 }}>
-          <Typography sx={{ fontWeight: 700 }}>
-            {fullName(firstName, lastName)}
-          </Typography>
+          <Typography sx={{ fontWeight: 700 }}>{fullName(firstName, lastName)}</Typography>
           {contextLine && (
             <Typography variant="body2" color="text.secondary">
               {contextLine}
@@ -94,14 +87,9 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
           )}
         </Box>
         <Divider />
-        <MenuItem component={RouterLink} to="/profile" onClick={() => setAnchor(null)}>
-          Profile
+        <MenuItem component={RouterLink} to="/" onClick={() => setAnchor(null)}>
+          Exit to main app
         </MenuItem>
-        {showAdminLink && (
-          <MenuItem component={RouterLink} to="/admin" onClick={() => setAnchor(null)}>
-            Admin console
-          </MenuItem>
-        )}
         <MenuItem onClick={handleSignOut}>Sign out</MenuItem>
       </Menu>
     </Box>

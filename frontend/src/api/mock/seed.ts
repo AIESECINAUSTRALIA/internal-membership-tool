@@ -117,6 +117,13 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'analytics_report', 'view', 'all'),
   row(positionKey, 'analytics_report', 'export', 'all'),
   row(positionKey, 'function', 'manage', 'all'), // spec §2A.8: every MC position
+  // Admin console (§2A.2): every MC position, so the capability is never held by one
+  // named person. `lc`/`person`/`audit_log` are admin-only resources, distinct from
+  // `member_record` (a person's own record) and `membership` (position history).
+  row(positionKey, 'admin_console', 'view', 'all'),
+  row(positionKey, 'lc', 'manage', 'all'),
+  row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'audit_log', 'view', 'all'),
 ]
 
 export const PERMISSION_MATRIX: MatrixRow[] = [

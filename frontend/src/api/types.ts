@@ -256,6 +256,31 @@ export interface HomeChart {
 }
 
 // ---------------------------------------------------------------------------
+// Admin console (§2A.2, §1.5). Separate area, own sign-in, gated on `admin_console`.
+// LCs reuse `ReferenceData.lcs`; People has no other screen to read from, so it gets
+// its own query/row shape, no email exposed anywhere else in the app (§2A.5).
+// ---------------------------------------------------------------------------
+
+/** One row of the admin People screen. Unlike `MemberSummaryRow`, this DOES carry
+ * email (§1.5 "identified by AIESEC email") and includes people with no current
+ * membership, since deactivating or fixing a past record is the point of the screen. */
+export interface AdminPersonRow {
+  id: string
+  firstName: string
+  lastName: string
+  email: string
+  /** Has at least one currently active membership (mirrors `hasActiveMembership`). */
+  active: boolean
+}
+
+export interface AdminPersonQuery {
+  search: string
+  /** Zero-based. */
+  page: number
+  pageSize: number
+}
+
+// ---------------------------------------------------------------------------
 // The one interface every page uses
 // ---------------------------------------------------------------------------
 
@@ -281,4 +306,7 @@ export interface Api {
 
   // Homepage
   getHomeChart(): Promise<HomeChart>
+
+  // Admin console: People (§2A.2, §1.5). LCs read `getReferenceData()` above.
+  listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>>
 }
