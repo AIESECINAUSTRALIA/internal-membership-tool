@@ -21,7 +21,7 @@ def db_session() -> Generator[Session, None, None]:
     depending on any other test."""
     connection = engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
     try:
         yield session

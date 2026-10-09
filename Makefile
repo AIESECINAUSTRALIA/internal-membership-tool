@@ -24,8 +24,9 @@ migrate: ## Apply migrations
 migration: ## Create a migration: make migration name="add foo"
 	$(DC) run --rm backend uv run alembic revision --autogenerate -m "$(name)"
 
-seed: ## Load placeholder lookup data
+seed: ## Load placeholder lookup + attribute/KPI data
 	$(DC) run --rm backend uv run python -m app.seeds.seed_lookups
+	$(DC) run --rm backend uv run python -m app.seeds.seed_attributes
 
 test: test-backend test-frontend ## Run all tests
 
