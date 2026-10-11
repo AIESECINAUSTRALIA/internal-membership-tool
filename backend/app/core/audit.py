@@ -31,7 +31,9 @@ def record_audit(
     that session commits.
 
     - `action`: `<resource>.<verb>`, e.g. `kpi_record.edit`, `auth.sign_in`.
-    - `summary`: a human-readable one-liner shown in the Admin console.
+    - `summary`: a human-readable one-liner shown in the Admin console. It must
+      **never contain personal data** (names, emails) — entries can't be edited
+      or deleted later, so a leak here is permanent. Refer to people by id.
     - Actor: pass `actor_membership_id` for normal actions, `actor_person_id`
       for sign-ins (no membership is chosen yet), neither for `system`.
     - `diff`: `{"before": ..., "after": ...}` for config-type changes. It must
