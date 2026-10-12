@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom'
 
+import { AdminApp } from './admin/AdminApp'
 import { RedirectIfSignedIn, RequireAllocated, RequirePermission, RequireUnallocated } from './auth/guards'
 import { PageMessage } from './components/PageMessage'
 import { AppShell } from './layout/AppShell'
@@ -27,10 +28,14 @@ const notAvailable = (
  * (see each page's own doc comment). Each route needs the same permission as its menu
  * item in `navigation/navConfig.ts`, and the same minimum scope, where the nav item
  * sets one.
+ *
+ * `/admin/*` is the Admin console (spec §2A.2): a separate area with its own guard
+ * tree, entirely apart from `RequireAllocated` below — see `admin/AdminApp.tsx`.
  */
 export default function App() {
   return (
     <Routes>
+      <Route path="/admin/*" element={<AdminApp />} />
       <Route element={<RedirectIfSignedIn />}>
         <Route path="/sign-in" element={<SignInPage />} />
       </Route>
