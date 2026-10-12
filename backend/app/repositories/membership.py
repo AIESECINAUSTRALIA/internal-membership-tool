@@ -36,16 +36,11 @@ def get_active_memberships_for_person(
     return session.execute(stmt).scalars().all()
 
 
-def build_membership_context(
-    session: Session, membership: Membership
-) -> MembershipContext:
+def build_membership_context(session: Session, membership: Membership) -> MembershipContext:
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
     pos_key = pos.key if pos else "member"
-    rank = (
-        getattr(pos, "rank", None)
-        or POSITION_RANKS.get(pos_key, 1)
-    )
+    rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
     can_add_same_rank = getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"})
 
     lc = session.get(LC, membership.lc_id)
@@ -134,31 +129,24 @@ def list_members_summary(
 
     people = {
         p.id: p
-        for p in session.execute(
-            select(Person).where(Person.id.in_(person_ids))
-        ).scalars().all()
+        for p in session.execute(select(Person).where(Person.id.in_(person_ids))).scalars().all()
     }
-    lcs = {
-        lc.id: lc
-        for lc in session.execute(select(LC)).scalars().all()
-    }
-    positions = {
-        pos.id: pos
-        for pos in session.execute(select(Position)).scalars().all()
-    }
-    functions = {
-        fn.id: fn
-        for fn in session.execute(select(Function)).scalars().all()
-    }
+    lcs = {lc.id: lc for lc in session.execute(select(LC)).scalars().all()}
+    positions = {pos.id: pos for pos in session.execute(select(Position)).scalars().all()}
+    functions = {fn.id: fn for fn in session.execute(select(Function)).scalars().all()}
 
     # Team member mappings
-    team_members = session.execute(
-        select(TeamMember).where(
-            TeamMember.membership_id.in_([m.id for m in memberships]),
-            TeamMember.start_date <= ref_date,
-            or_(TeamMember.end_date.is_(None), TeamMember.end_date >= ref_date),
+    team_members = (
+        session.execute(
+            select(TeamMember).where(
+                TeamMember.membership_id.in_([m.id for m in memberships]),
+                TeamMember.start_date <= ref_date,
+                or_(TeamMember.end_date.is_(None), TeamMember.end_date >= ref_date),
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     team_by_membership = {tm.membership_id: tm.team_id for tm in team_members}
 
     # Group memberships by person
@@ -173,9 +161,8 @@ def list_members_summary(
             continue
 
         first_name = getattr(person, "first_name", "") or person.full_name.split(" ")[0]
-        last_name = (
-            getattr(person, "last_name", "")
-            or (" ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else "")
+        last_name = getattr(person, "last_name", "") or (
+            " ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else ""
         )
 
         primary_lc = lcs.get(p_memberships[0].lc_id)
@@ -292,9 +279,7 @@ def add_member(
     if not lc:
         return {"status": "rejected", "message": "LC not found."}
 
-    pos = session.execute(
-        select(Position).where(Position.key == position_key)
-    ).scalar_one_or_none()
+    pos = session.execute(select(Position).where(Position.key == position_key)).scalar_one_or_none()
     if not pos:
         return {"status": "rejected", "message": "Position not found."}
 
@@ -319,9 +304,11 @@ def add_member(
 
     # Validate target against active memberships
     if person is not None:
-        theirs = session.execute(
-            select(Membership).where(Membership.person_id == person.id)
-        ).scalars().all()
+        theirs = (
+            session.execute(select(Membership).where(Membership.person_id == person.id))
+            .scalars()
+            .all()
+        )
 
         # Spec §3.6: Adding to LC while holding active overlapping MC membership is blocked
         for m in theirs:
@@ -370,14 +357,18 @@ def add_member(
         session.flush()
     else:
         # Transfer logic (§5.1): End active memberships in other LCs to start_date - 1 day
-        theirs = session.execute(
-            select(Membership).where(
-                Membership.person_id == person.id,
-                Membership.lc_id != lc.id,
-                Membership.start_date <= end_date,
-                or_(Membership.end_date.is_(None), Membership.end_date >= start_date),
+        theirs = (
+            session.execute(
+                select(Membership).where(
+                    Membership.person_id == person.id,
+                    Membership.lc_id != lc.id,
+                    Membership.start_date <= end_date,
+                    or_(Membership.end_date.is_(None), Membership.end_date >= start_date),
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         day_before = start_date - timedelta(days=1)
         for old_m in theirs:

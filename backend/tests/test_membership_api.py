@@ -153,12 +153,8 @@ def client_with_actor(
     db_session.flush()
 
     actor_map = {
-        "lcvp": CurrentActor(
-            person=p_lcvp, active_memberships=[m_lcvp], acting_membership=m_lcvp
-        ),
-        "tl": CurrentActor(
-            person=p_tl, active_memberships=[m_tl], acting_membership=m_tl
-        ),
+        "lcvp": CurrentActor(person=p_lcvp, active_memberships=[m_lcvp], acting_membership=m_lcvp),
+        "tl": CurrentActor(person=p_tl, active_memberships=[m_tl], acting_membership=m_tl),
         "member": CurrentActor(
             person=p_member_usyd,
             active_memberships=[m_member_usyd],
@@ -342,9 +338,7 @@ def test_add_member_with_existing_email_ends_other_lc_memberships(
 
     # Verify audit log recorded the transfer termination
     audit_end = db_session.execute(
-        select(AuditLog).where(
-            AuditLog.resource_id == 3, AuditLog.action == "membership.end_term"
-        )
+        select(AuditLog).where(AuditLog.resource_id == 3, AuditLog.action == "membership.end_term")
     ).scalar_one_or_none()
     assert audit_end is not None
 

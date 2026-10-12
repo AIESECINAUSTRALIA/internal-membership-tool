@@ -27,9 +27,7 @@ def list_members(
     db: Session = Depends(get_db),
 ) -> Page[MemberSummaryRow]:
     """Summary list of current members matching Spec §2A.5 (listMembers)."""
-    actor_contexts = [
-        repo.build_membership_context(db, m) for m in actor.active_memberships
-    ]
+    actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
     filter_lc_id = int(query.lcId) if query.lcId and query.lcId.isdigit() else None
 
@@ -59,9 +57,7 @@ def add_member(
     db: Session = Depends(get_db),
 ) -> AddMemberResult:
     """Add a member per Spec §2A.5, §3.4, §3.6, and §5.1 (addMember)."""
-    actor_contexts = [
-        repo.build_membership_context(db, m) for m in actor.active_memberships
-    ]
+    actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
     res = repo.add_member(
         db,
@@ -92,15 +88,11 @@ def get_membership_detail(
     db: Session = Depends(get_db),
 ) -> MembershipDetail:
     """Fetch detail payload for the Manage Membership dialog per Spec §2A.5."""
-    actor_contexts = [
-        repo.build_membership_context(db, m) for m in actor.active_memberships
-    ]
+    actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
     detail = repo.get_membership_detail(db, actor_contexts, membership_id)
     if detail is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Membership not found")
 
     return MembershipDetail(**detail)
 
@@ -113,9 +105,7 @@ def extend_term(
     db: Session = Depends(get_db),
 ) -> ActionResult:
     """Extend term for membership per Spec §2A.5 and §3.4 (extendTerm)."""
-    actor_contexts = [
-        repo.build_membership_context(db, m) for m in actor.active_memberships
-    ]
+    actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
     res = repo.extend_term(db, actor_contexts, membership_id, payload.newEndDate)
     if res["status"] == "ok":
@@ -132,9 +122,7 @@ def move_to_team(
     db: Session = Depends(get_db),
 ) -> ActionResult:
     """Move member to another team per Spec §2A.5 and §5.1 (moveToTeam)."""
-    actor_contexts = [
-        repo.build_membership_context(db, m) for m in actor.active_memberships
-    ]
+    actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
     res = repo.move_to_team(db, actor_contexts, membership_id, payload.teamId)
     if res["status"] == "ok":
