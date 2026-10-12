@@ -12,6 +12,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.db.session import engine
+from tests.auth_helpers import client  # noqa: F401  (the signed-in API test client)
 
 
 @pytest.fixture

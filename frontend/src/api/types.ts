@@ -263,9 +263,16 @@ export interface Api {
   // Session
   /** The signed-in person, or null when signed out or the session expired. */
   getMe(): Promise<Me | null>
-  /** Placeholder now; becomes "Sign in with Google" (§2A.3, §9). */
+  /** 'google' for real sign-in (api/supabaseSession.ts); unset means the development
+   * placeholder (the mock). The sign-in page shows the matching button (§2A.3). */
+  readonly signInMethod?: 'mock' | 'google'
+  /** Mock: signs in as a persona. Google: leaves for Google's sign-in page (§2A.3, §9). */
   signIn(): Promise<void>
   signOut(): Promise<void>
+  /** Calls `listener` whenever the signed-in identity may have changed outside the app's
+   * own signIn/signOut (e.g. returning from Google, or the session expiring). Returns
+   * an unsubscribe function. Optional: the mock has no outside changes. */
+  onSessionChange?(listener: () => void): () => void
 
   // Profile
   /** Person-level custom fields only. Names, email, membership and dates are locked (§2A.9). */

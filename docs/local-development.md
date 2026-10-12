@@ -167,6 +167,10 @@ Then fill in `.env`:
   not secrets.
 - **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
   from the shared store (below), not by asking in Slack.
+- **Sign-in vars** (`VITE_AUTH_MODE`, `ALLOWED_EMAIL_DOMAINS`,
+  `VITE_GOOGLE_HOSTED_DOMAIN`) — leave `VITE_AUTH_MODE=mock` to use the development
+  sign-in with no Supabase at all. Set it to `supabase` for real Google sign-in; that
+  needs the one-time setup in [`docs/auth.md`](auth.md).
 
 ### Where the real values live
 
@@ -205,6 +209,23 @@ platform holds its own copy, set through its dashboard:
 
 Local, Preview, and Production each use **different** values (different Supabase
 projects / databases). Never point local dev at production.
+
+### Sign-in placeholder in deployed environments
+
+Spec §2A.3: the development sign-in (the plain "Sign in" button and `?as=` personas) must
+be **off in every deployed environment**. How that's enforced:
+
+- **Frontend:** a production build (`npm run build`, which is what Vercel runs) uses real
+  Google sign-in unless `VITE_AUTH_MODE=mock` is set explicitly
+  (`frontend/src/api/authMode.ts`). On Vercel, **Preview and Production must set
+  `VITE_AUTH_MODE=supabase` or leave it unset — never `mock`.** They also need
+  `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and `VITE_API_URL`.
+- **Backend:** there is no sign-in stub. Every API request needs a valid Supabase access
+  token, from `SUPABASE_URL`'s project, for an email in `ALLOWED_EMAIL_DOMAINS`.
+- The mock lives only in the browser and the backend trusts only Supabase-signed
+  tokens, so even a wrongly configured frontend can't get real access with it.
+
+Details: [`docs/auth.md`](auth.md).
 
 The current `backend` CI workflow starts its own throwaway Postgres and needs
 **no** real secrets. Add GitHub Actions secrets only when a workflow genuinely
