@@ -12,7 +12,11 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.router import api_router
+
 app = FastAPI(title="AIESEC Australia — Membership Tool API")
+
+app.include_router(api_router)
 
 # Allow the local Vite dev server to call the API during development.
 # Replaced by a config-driven allowlist in app/config.py during implementation.
