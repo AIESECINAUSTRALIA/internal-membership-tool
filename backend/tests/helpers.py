@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.membership import Membership
-from app.models.org import LC, Function, LCType, Position, Term
+from app.models.org import LC, Function, LCType, Position, StateTimezone, Term
 from app.models.person import Person
 
 TODAY = date(2026, 6, 15)
@@ -23,6 +23,18 @@ def make_lc(session: Session, *, name: str = "AIESEC in Testville") -> LC:
     session.add(lc)
     session.flush()
     return lc
+
+
+def make_state_timezone(
+    session: Session,
+    *,
+    state: str = "NSW",
+    timezone: str = "Australia/Sydney",
+) -> StateTimezone:
+    st = StateTimezone(state=state, timezone=timezone)
+    session.add(st)
+    session.flush()
+    return st
 
 
 def make_position(
