@@ -18,8 +18,14 @@ YEAR_AGO = TODAY - timedelta(days=365)
 YEAR_AHEAD = TODAY + timedelta(days=365)
 
 
-def make_lc(session: Session, *, name: str = "AIESEC in Testville") -> LC:
-    lc = LC(name=name, type=LCType.LC, active=True)
+def make_lc(
+    session: Session,
+    *,
+    name: str = "AIESEC in Testville",
+    lc_type: LCType = LCType.LC,
+    state: str | None = None,
+) -> LC:
+    lc = LC(name=name, type=lc_type, state=state, active=True)
     session.add(lc)
     session.flush()
     return lc
