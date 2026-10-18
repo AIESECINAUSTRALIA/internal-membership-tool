@@ -31,6 +31,21 @@ class LC(Base):
         Enum(LCType, name="lctype", native_enum=False, length=10, create_constraint=True)
     )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    state: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
+class StateTimezone(Base):
+    """Lookup: Australian state/territory abbreviation → IANA timezone.
+
+    Config data seeded in its migration — not runtime-editable by admins.
+    The default for rows with no state (e.g. the MC) is Australia/Melbourne,
+    defined as LC_DEFAULT_TIMEZONE in app/repositories/lc.py.
+    """
+
+    __tablename__ = "state_timezone"
+
+    state: Mapped[str] = mapped_column(String, primary_key=True)
+    timezone: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class Term(Base):
