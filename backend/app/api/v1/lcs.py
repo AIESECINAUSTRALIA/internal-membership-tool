@@ -4,9 +4,10 @@ Every mutating endpoint is gated on `manage` on `lc` in the permission
 matrix. That check is not built yet — each one carries a TODO.
 """
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -32,7 +33,7 @@ from app.schemas.lc import (
 router = APIRouter(prefix="/lcs", tags=["lcs"])
 
 
-def get_db() -> Session:  # type: ignore[return]
+def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:
         yield db
@@ -43,7 +44,6 @@ def get_db() -> Session:  # type: ignore[return]
 @router.get("/state-timezones", response_model=list[StateTimezoneResponse])
 def list_state_timezones(db: Session = Depends(get_db)) -> Sequence[StateTimezone]:
     """List the state → timezone lookup table."""
-    from sqlalchemy import select
     return db.execute(select(StateTimezone)).scalars().all()
 
 

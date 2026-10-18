@@ -12,9 +12,9 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="AIESEC Australia — Membership Tool API")
+from app.api.router import api_router
 
-from app.api.router import api_router  # noqa: E402
+app = FastAPI(title="AIESEC Australia — Membership Tool API")
 
 app.include_router(api_router)
 
