@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
-from app.models.membership import Membership
+from app.models.membership import Membership, Team
 from app.models.org import LC, Function, LCType, Position, StateTimezone, Term
 from app.models.person import Person
 
@@ -117,6 +117,20 @@ def make_membership(
     session.add(membership)
     session.flush()
     return membership
+
+
+def make_team(
+    session: Session,
+    *,
+    lc: LC,
+    function: Function,
+    term: Term,
+    name: str = "Test Team",
+) -> Team:
+    team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name=name)
+    session.add(team)
+    session.flush()
+    return team
 
 
 def make_person_and_recorder(session: Session) -> tuple:

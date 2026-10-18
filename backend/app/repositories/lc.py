@@ -5,12 +5,14 @@ audit entry is saved if and only if the change is saved.
 """
 
 from collections.abc import Sequence
+from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.models.org import LC, LCType, StateTimezone
+from app.models.membership import Membership, Team
+from app.models.org import LC, LCType, StateTimezone, Term
 
 LC_DEFAULT_TIMEZONE = "Australia/Melbourne"
 
@@ -144,3 +146,87 @@ def deactivate_lc(
         actor_membership_id=actor_membership_id,
     )
     return lc
+
+
+def merge_lcs(
+    session: Session,
+    *,
+    source_id: int,
+    target_id: int,
+    actor_membership_id: int | None = None,
+) -> tuple[int, int]:
+    """Merge source LC into target LC.
+
+    Re-points active memberships and current-term teams from source to
+    target. Historical records (ended memberships, past-term teams) stay
+    pointing at source so historical reports remain accurate. Source is
+    then marked inactive.
+
+    Returns (memberships_moved, teams_moved).
+
+    Raises ValueError if source == target or either LC doesn't exist.
+    """
+    if source_id == target_id:
+        raise ValueError("source and target must differ")
+
+    source = session.get(LC, source_id)
+    if source is None:
+        raise ValueError(f"LC {source_id} not found")
+
+    target = session.get(LC, target_id)
+    if target is None:
+        raise ValueError(f"LC {target_id} not found")
+
+    today = date.today()
+
+    # Re-point active memberships (no end_date, or end_date in the future).
+    result = session.execute(
+        update(Membership)
+        .where(
+            Membership.lc_id == source_id,
+            or_(Membership.end_date.is_(None), Membership.end_date >= today),
+        )
+        .values(lc_id=target_id)
+    )
+    memberships_moved: int = result.rowcount
+
+    # Re-point teams whose term has not yet ended.
+    current_team_ids = list(
+        session.execute(
+            select(Team.id)
+            .join(Term, Team.term_id == Term.id)
+            .where(Team.lc_id == source_id, Term.end_date >= today)
+        ).scalars()
+    )
+    teams_moved = 0
+    if current_team_ids:
+        result2 = session.execute(
+            update(Team)
+            .where(Team.id.in_(current_team_ids))
+            .values(lc_id=target_id)
+        )
+        teams_moved = result2.rowcount
+
+    # Mark source inactive.
+    source.active = False
+    session.flush()
+
+    record_audit(
+        session,
+        action="lc.merge",
+        resource_type="lc",
+        resource_id=source_id,
+        summary=(
+            f"LC {source_id} merged into LC {target_id}: "
+            f"{memberships_moved} active memberships and {teams_moved} current-term teams re-pointed"
+        ),
+        actor_membership_id=actor_membership_id,
+        diff={
+            "source_id": source_id,
+            "target_id": target_id,
+            "memberships_moved": memberships_moved,
+            "teams_moved": teams_moved,
+        },
+    )
+
+    return memberships_moved, teams_moved
