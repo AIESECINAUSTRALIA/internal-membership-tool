@@ -8,6 +8,7 @@ from collections.abc import Generator, Sequence
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -58,14 +59,20 @@ def list_lcs_endpoint(
 @router.post("", response_model=LCResponse, status_code=status.HTTP_201_CREATED)
 def create_lc_endpoint(body: LCCreate, db: Session = Depends(get_db)) -> object:
     # TODO: gate on manage lc permission
-    lc = create_lc(
-        db,
-        name=body.name,
-        lc_type=body.lc_type,
-        state=body.state,
-        actor_membership_id=None,  # TODO: replace with real actor when auth is built
-    )
-    db.commit()
+    try:
+        lc = create_lc(
+            db,
+            name=body.name,
+            lc_type=body.lc_type,
+            state=body.state,
+            actor_membership_id=None,  # TODO: replace with real actor when auth is built
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="An LC with that name already exists"
+        ) from None
     return lc
 
 
@@ -78,14 +85,22 @@ def update_lc_endpoint(
     if lc is None:
         raise HTTPException(status_code=404, detail=f"LC {lc_id} not found")
 
-    if body.name is not None:
-        rename_lc(db, lc_id=lc_id, new_name=body.name, actor_membership_id=None)
-    if body.state is not None:
-        set_lc_state(db, lc_id=lc_id, state=body.state, actor_membership_id=None)
-    if body.active is False:
-        deactivate_lc(db, lc_id=lc_id, actor_membership_id=None)
-
-    db.commit()
+    try:
+        if body.name is not None:
+            rename_lc(db, lc_id=lc_id, new_name=body.name, actor_membership_id=None)
+        if body.state is not None:
+            set_lc_state(db, lc_id=lc_id, state=body.state, actor_membership_id=None)
+        if body.active is False:
+            deactivate_lc(db, lc_id=lc_id, actor_membership_id=None)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="An LC with that name already exists"
+        ) from None
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     db.refresh(lc)
     return lc
 

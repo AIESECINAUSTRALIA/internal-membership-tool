@@ -3,7 +3,7 @@ from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.membership import Membership, Team
+from app.models.membership import Membership
 from app.models.org import LCType
 from app.models.privacy import AuditLog
 from app.repositories.lc import (
@@ -212,7 +212,9 @@ def test_merge_lcs_re_points_active_membership(db_session: Session) -> None:
         db_session, person=person, lc=source, position=position, term=term
     )  # end_date=None → active
 
-    memberships_moved, _ = merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    memberships_moved, _ = merge_lcs(
+        db_session, source_id=source.id, target_id=target.id, as_of=TODAY
+    )
 
     db_session.refresh(membership)
     assert membership.lc_id == target.id
@@ -230,7 +232,7 @@ def test_merge_lcs_leaves_historical_membership_under_source(db_session: Session
         end=YEAR_AGO + timedelta(days=1),  # ended in the past
     )
 
-    merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    merge_lcs(db_session, source_id=source.id, target_id=target.id, as_of=TODAY)
 
     db_session.refresh(past_membership)
     assert past_membership.lc_id == source.id  # unchanged
@@ -243,7 +245,7 @@ def test_merge_lcs_re_points_current_term_team(db_session: Session) -> None:
     term = make_term(db_session, name="Current Term", start=YEAR_AGO, end=YEAR_AHEAD)
     team = make_team(db_session, lc=source, function=function, term=term)
 
-    _, teams_moved = merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    _, teams_moved = merge_lcs(db_session, source_id=source.id, target_id=target.id, as_of=TODAY)
 
     db_session.refresh(team)
     assert team.lc_id == target.id
@@ -261,7 +263,7 @@ def test_merge_lcs_leaves_historical_team_under_source(db_session: Session) -> N
     )
     team = make_team(db_session, lc=source, function=function, term=past_term)
 
-    merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    merge_lcs(db_session, source_id=source.id, target_id=target.id, as_of=TODAY)
 
     db_session.refresh(team)
     assert team.lc_id == source.id  # unchanged
@@ -271,7 +273,7 @@ def test_merge_lcs_marks_source_inactive(db_session: Session) -> None:
     source = make_lc(db_session, name="Source LC 5")
     target = make_lc(db_session, name="Target LC 5")
 
-    merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    merge_lcs(db_session, source_id=source.id, target_id=target.id, as_of=TODAY)
 
     db_session.refresh(source)
     assert source.active is False
@@ -281,7 +283,7 @@ def test_merge_lcs_writes_audit_entry(db_session: Session) -> None:
     source = make_lc(db_session, name="Source LC 6")
     target = make_lc(db_session, name="Target LC 6")
 
-    merge_lcs(db_session, source_id=source.id, target_id=target.id)
+    merge_lcs(db_session, source_id=source.id, target_id=target.id, as_of=TODAY)
 
     entry = db_session.execute(
         select(AuditLog).where(
@@ -297,18 +299,18 @@ def test_merge_lcs_raises_when_source_equals_target(db_session: Session) -> None
     import pytest
     lc = make_lc(db_session, name="Same LC")
     with pytest.raises(ValueError, match="source and target must differ"):
-        merge_lcs(db_session, source_id=lc.id, target_id=lc.id)
+        merge_lcs(db_session, source_id=lc.id, target_id=lc.id, as_of=TODAY)
 
 
 def test_merge_lcs_raises_for_unknown_source(db_session: Session) -> None:
     import pytest
     target = make_lc(db_session, name="Target Only")
     with pytest.raises(ValueError, match="LC 999999 not found"):
-        merge_lcs(db_session, source_id=999999, target_id=target.id)
+        merge_lcs(db_session, source_id=999999, target_id=target.id, as_of=TODAY)
 
 
 def test_merge_lcs_raises_for_unknown_target(db_session: Session) -> None:
     import pytest
     source = make_lc(db_session, name="Source Only")
     with pytest.raises(ValueError, match="LC 999999 not found"):
-        merge_lcs(db_session, source_id=source.id, target_id=999999)
+        merge_lcs(db_session, source_id=source.id, target_id=999999, as_of=TODAY)

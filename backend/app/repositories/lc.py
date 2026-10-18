@@ -6,8 +6,10 @@ audit entry is saved if and only if the change is saved.
 
 from collections.abc import Sequence
 from datetime import date
+from typing import Any, cast
 
 from sqlalchemy import or_, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -154,6 +156,7 @@ def merge_lcs(
     source_id: int,
     target_id: int,
     actor_membership_id: int | None = None,
+    as_of: date | None = None,
 ) -> tuple[int, int]:
     """Merge source LC into target LC.
 
@@ -177,16 +180,19 @@ def merge_lcs(
     if target is None:
         raise ValueError(f"LC {target_id} not found")
 
-    today = date.today()
+    today = as_of if as_of is not None else date.today()
 
     # Re-point active memberships (no end_date, or end_date in the future).
-    result = session.execute(
-        update(Membership)
-        .where(
-            Membership.lc_id == source_id,
-            or_(Membership.end_date.is_(None), Membership.end_date >= today),
-        )
-        .values(lc_id=target_id)
+    result: CursorResult[Any] = cast(
+        CursorResult[Any],
+        session.execute(
+            update(Membership)
+            .where(
+                Membership.lc_id == source_id,
+                or_(Membership.end_date.is_(None), Membership.end_date >= today),
+            )
+            .values(lc_id=target_id)
+        ),
     )
     memberships_moved: int = result.rowcount
 
@@ -200,10 +206,13 @@ def merge_lcs(
     )
     teams_moved = 0
     if current_team_ids:
-        result2 = session.execute(
-            update(Team)
-            .where(Team.id.in_(current_team_ids))
-            .values(lc_id=target_id)
+        result2: CursorResult[Any] = cast(
+            CursorResult[Any],
+            session.execute(
+                update(Team)
+                .where(Team.id.in_(current_team_ids))
+                .values(lc_id=target_id)
+            ),
         )
         teams_moved = result2.rowcount
 
@@ -218,7 +227,8 @@ def merge_lcs(
         resource_id=source_id,
         summary=(
             f"LC {source_id} merged into LC {target_id}: "
-            f"{memberships_moved} active memberships and {teams_moved} current-term teams re-pointed"
+            f"{memberships_moved} active memberships "
+            f"and {teams_moved} current-term teams re-pointed"
         ),
         actor_membership_id=actor_membership_id,
         diff={

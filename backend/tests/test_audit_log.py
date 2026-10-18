@@ -1,6 +1,6 @@
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
-import pytest
 
 from app.core.audit import record_audit
 
