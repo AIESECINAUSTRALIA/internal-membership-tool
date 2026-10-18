@@ -1,18 +1,27 @@
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.membership import Membership
 from app.models.org import LCType
 from app.models.privacy import AuditLog
 from app.repositories.lc import (
     LC_DEFAULT_TIMEZONE,
     create_lc,
+    deactivate_lc,
     get_lc,
     list_lcs,
     rename_lc,
     resolve_timezone,
     set_lc_state,
 )
-from tests.helpers import make_lc, make_state_timezone
+from tests.helpers import (
+    make_lc,
+    make_membership,
+    make_person,
+    make_position,
+    make_state_timezone,
+    make_term,
+)
 
 
 def test_list_lcs_returns_active_only_by_default(db_session: Session) -> None:
@@ -144,3 +153,42 @@ def test_set_lc_state_raises_for_unknown_id(db_session: Session) -> None:
     import pytest
     with pytest.raises(ValueError, match="LC 999999 not found"):
         set_lc_state(db_session, lc_id=999999, state="NSW")
+
+
+def test_deactivate_lc_sets_active_false(db_session: Session) -> None:
+    lc = make_lc(db_session, name="To Deactivate")
+    deactivate_lc(db_session, lc_id=lc.id)
+    assert lc.active is False
+
+
+def test_deactivate_lc_writes_audit_entry(db_session: Session) -> None:
+    lc = make_lc(db_session, name="Audit Deactivate")
+    deactivate_lc(db_session, lc_id=lc.id)
+    entry = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.action == "lc.deactivate",
+            AuditLog.resource_id == lc.id,
+        )
+    ).scalar_one()
+    assert entry is not None
+
+
+def test_deactivate_lc_does_not_delete_historical_memberships(db_session: Session) -> None:
+    lc = make_lc(db_session, name="Historical LC")
+    position = make_position(db_session)
+    term = make_term(db_session)
+    person = make_person(db_session)
+    membership = make_membership(db_session, person=person, lc=lc, position=position, term=term)
+
+    deactivate_lc(db_session, lc_id=lc.id)
+
+    # Membership still exists and still points at the now-inactive LC
+    still_there = db_session.get(Membership, membership.id)
+    assert still_there is not None
+    assert still_there.lc_id == lc.id
+
+
+def test_deactivate_lc_raises_for_unknown_id(db_session: Session) -> None:
+    import pytest
+    with pytest.raises(ValueError, match="LC 999999 not found"):
+        deactivate_lc(db_session, lc_id=999999)

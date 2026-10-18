@@ -117,3 +117,30 @@ def set_lc_state(
         diff={"before": {"state": old_state}, "after": {"state": state}},
     )
     return lc
+
+
+def deactivate_lc(
+    session: Session,
+    *,
+    lc_id: int,
+    actor_membership_id: int | None = None,
+) -> LC:
+    """Mark an LC inactive. Historical records pointing at it are preserved.
+
+    Per spec §1.5: deactivate/soft-delete for anything referenced by
+    history; hard-delete is not offered.
+    """
+    lc = session.get(LC, lc_id)
+    if lc is None:
+        raise ValueError(f"LC {lc_id} not found")
+    lc.active = False
+    session.flush()
+    record_audit(
+        session,
+        action="lc.deactivate",
+        resource_type="lc",
+        resource_id=lc_id,
+        summary=f"LC {lc_id} marked inactive",
+        actor_membership_id=actor_membership_id,
+    )
+    return lc
