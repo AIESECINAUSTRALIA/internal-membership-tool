@@ -31,8 +31,9 @@ def make_state_timezone(
     state: str = "NSW",
     timezone: str = "Australia/Sydney",
 ) -> StateTimezone:
-    st = StateTimezone(state=state, timezone=timezone)
-    session.add(st)
+    # Use merge() so this works whether or not the seed migration already
+    # inserted this state row (merge upserts by PK, avoiding UniqueViolation).
+    st = session.merge(StateTimezone(state=state, timezone=timezone))
     session.flush()
     return st
 
