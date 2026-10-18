@@ -209,9 +209,7 @@ def merge_lcs(
         result2: CursorResult[Any] = cast(
             CursorResult[Any],
             session.execute(
-                update(Team)
-                .where(Team.id.in_(current_team_ids))
-                .values(lc_id=target_id)
+                update(Team).where(Team.id.in_(current_team_ids)).values(lc_id=target_id)
             ),
         )
         teams_moved = result2.rowcount

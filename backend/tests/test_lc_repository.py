@@ -135,6 +135,7 @@ def test_rename_lc_writes_audit_entry_with_diff(db_session: Session) -> None:
 
 def test_rename_lc_raises_for_unknown_id(db_session: Session) -> None:
     import pytest
+
     with pytest.raises(ValueError, match="LC 999999 not found"):
         rename_lc(db_session, lc_id=999999, new_name="Anything")
 
@@ -159,6 +160,7 @@ def test_set_lc_state_writes_audit_entry(db_session: Session) -> None:
 
 def test_set_lc_state_raises_for_unknown_id(db_session: Session) -> None:
     import pytest
+
     with pytest.raises(ValueError, match="LC 999999 not found"):
         set_lc_state(db_session, lc_id=999999, state="NSW")
 
@@ -198,6 +200,7 @@ def test_deactivate_lc_does_not_delete_historical_memberships(db_session: Sessio
 
 def test_deactivate_lc_raises_for_unknown_id(db_session: Session) -> None:
     import pytest
+
     with pytest.raises(ValueError, match="LC 999999 not found"):
         deactivate_lc(db_session, lc_id=999999)
 
@@ -228,7 +231,11 @@ def test_merge_lcs_leaves_historical_membership_under_source(db_session: Session
     term = make_term(db_session, name="Past Term", start=YEAR_AGO, end=YEAR_AGO + timedelta(days=1))
     person = make_person(db_session, email="test_historical@aiesec.net")
     past_membership = make_membership(
-        db_session, person=person, lc=source, position=position, term=term,
+        db_session,
+        person=person,
+        lc=source,
+        position=position,
+        term=term,
         end=YEAR_AGO + timedelta(days=1),  # ended in the past
     )
 
@@ -257,7 +264,8 @@ def test_merge_lcs_leaves_historical_team_under_source(db_session: Session) -> N
     target = make_lc(db_session, name="Target LC 4")
     function = make_function(db_session, key="test_ogv_hist")
     past_term = make_term(
-        db_session, name="Past Term 2",
+        db_session,
+        name="Past Term 2",
         start=YEAR_AGO,
         end=TODAY - timedelta(days=1),  # ended yesterday
     )
@@ -297,6 +305,7 @@ def test_merge_lcs_writes_audit_entry(db_session: Session) -> None:
 
 def test_merge_lcs_raises_when_source_equals_target(db_session: Session) -> None:
     import pytest
+
     lc = make_lc(db_session, name="Same LC")
     with pytest.raises(ValueError, match="source and target must differ"):
         merge_lcs(db_session, source_id=lc.id, target_id=lc.id, as_of=TODAY)
@@ -304,6 +313,7 @@ def test_merge_lcs_raises_when_source_equals_target(db_session: Session) -> None
 
 def test_merge_lcs_raises_for_unknown_source(db_session: Session) -> None:
     import pytest
+
     target = make_lc(db_session, name="Target Only")
     with pytest.raises(ValueError, match="LC 999999 not found"):
         merge_lcs(db_session, source_id=999999, target_id=target.id, as_of=TODAY)
@@ -311,6 +321,7 @@ def test_merge_lcs_raises_for_unknown_source(db_session: Session) -> None:
 
 def test_merge_lcs_raises_for_unknown_target(db_session: Session) -> None:
     import pytest
+
     source = make_lc(db_session, name="Source Only")
     with pytest.raises(ValueError, match="LC 999999 not found"):
         merge_lcs(db_session, source_id=source.id, target_id=999999, as_of=TODAY)

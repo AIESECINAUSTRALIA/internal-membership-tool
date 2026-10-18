@@ -70,16 +70,12 @@ def create_lc_endpoint(body: LCCreate, db: Session = Depends(get_db)) -> object:
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=409, detail="An LC with that name already exists"
-        ) from None
+        raise HTTPException(status_code=409, detail="An LC with that name already exists") from None
     return lc
 
 
 @router.patch("/{lc_id}", response_model=LCResponse)
-def update_lc_endpoint(
-    lc_id: int, body: LCUpdate, db: Session = Depends(get_db)
-) -> object:
+def update_lc_endpoint(lc_id: int, body: LCUpdate, db: Session = Depends(get_db)) -> object:
     # TODO: gate on manage lc permission
     lc = get_lc(db, lc_id)
     if lc is None:
@@ -95,9 +91,7 @@ def update_lc_endpoint(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status_code=409, detail="An LC with that name already exists"
-        ) from None
+        raise HTTPException(status_code=409, detail="An LC with that name already exists") from None
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -106,9 +100,7 @@ def update_lc_endpoint(
 
 
 @router.post("/{lc_id}/merge", response_model=MergeResult)
-def merge_lcs_endpoint(
-    lc_id: int, body: LCMergeRequest, db: Session = Depends(get_db)
-) -> object:
+def merge_lcs_endpoint(lc_id: int, body: LCMergeRequest, db: Session = Depends(get_db)) -> object:
     # TODO: gate on manage lc permission
     if get_lc(db, lc_id) is None:
         raise HTTPException(status_code=404, detail=f"LC {lc_id} not found")
