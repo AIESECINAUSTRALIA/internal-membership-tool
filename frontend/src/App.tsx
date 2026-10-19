@@ -11,6 +11,7 @@ import { ProfilePage } from './pages/ProfilePage'
 import { SettingsPage } from './pages/SettingsPage'
 import { SignInPage } from './pages/SignInPage'
 import { TrackingPage } from './pages/TrackingPage'
+import { OdmPage } from './pages/OdmPage'
 
 const notAvailable = (
   <PageMessage title="Page not available">
@@ -48,6 +49,9 @@ export default function App() {
           </Route>
           <Route element={<RequirePermission resource="analytics_report" action="view" minScope="team" fallback={notAvailable} />}>
             <Route path="data" element={<DataPage />} />
+          </Route>
+          <Route element={<RequirePermission resource="odm" action="view" minScope="lc" fallback={notAvailable} />}>
+            <Route path="odm" element={<OdmPage />} />
           </Route>
           <Route path="settings" element={<SettingsPage />} />
           <Route path="profile" element={<ProfilePage />} />
