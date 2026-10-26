@@ -494,3 +494,50 @@ def test_add_member_allowed_new_person(client_with_actor: Fixture, db_session: S
     ).scalar_one_or_none()
     assert created is not None
     assert _create_audit_count(db_session) == 1
+
+
+# ---------------------------------------------------------------------------
+# Test: detail endpoint respects LC isolation; unallocated actors get nothing
+# ---------------------------------------------------------------------------
+
+
+def test_get_membership_detail_other_lc_is_404(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.get(f"/api/v1/members/{seed.m_member_mu.id}")
+    assert resp.status_code == 404
+
+
+def test_get_membership_detail_denied_for_member(client_with_actor: Fixture) -> None:
+    client, actor_map, seed = client_with_actor
+    app.dependency_overrides[get_current_actor] = lambda: actor_map["member"]
+    resp = client.get(f"/api/v1/members/{seed.m_tl.id}")
+    assert resp.status_code == 404
+
+
+def test_actor_without_membership_gets_nothing(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    nobody = CurrentActor(
+        person=_person(db_session, "Unallocated", "test-nobody@aiesec.net"),
+        active_memberships=[],
+        acting_membership=None,
+    )
+    app.dependency_overrides[get_current_actor] = lambda: nobody
+    target = seed.m_member_usyd.id
+
+    listed = client.post("/api/v1/members/summary", json={})
+    assert listed.status_code == 200
+    assert listed.json()["items"] == []
+    assert listed.json()["total"] == 0
+
+    assert client.get(f"/api/v1/members/{target}").status_code == 404
+
+    extend = client.post(f"/api/v1/members/{target}/extend-term", json={"newEndDate": "2027-06-30"})
+    assert extend.json()["status"] == "rejected"
+
+    move = client.post(f"/api/v1/members/{target}/move-to-team", json={"teamId": seed.team_b.id})
+    assert move.json()["status"] == "rejected"
+
+    added = client.post("/api/v1/members", json=_add_payload(seed))
+    assert added.json()["status"] == "rejected"

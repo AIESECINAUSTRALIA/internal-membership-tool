@@ -23,6 +23,7 @@ from app.core.permissions import (
     can_add_member,
     can_extend_term,
     can_move_to_team,
+    can_view_membership,
     position_level,
     resolve_widest_scope,
 )
@@ -584,6 +585,11 @@ def get_membership_detail(
     """Detail payload for the Manage Membership dialog per Spec §2A.5."""
     m = session.get(Membership, membership_id)
     if not m:
+        return None
+
+    # Same LC isolation as the list (§2A.5). Callers see "not found" either way, so
+    # ids in other LCs are not confirmed to exist.
+    if not can_view_membership(actor_memberships, build_membership_context(session, m)):
         return None
 
     person = session.get(Person, m.person_id)

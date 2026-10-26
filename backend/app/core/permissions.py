@@ -238,6 +238,27 @@ def can_act_on_target(
     return target.position_rank < acting.position_rank
 
 
+def can_view_membership(
+    actor_memberships: Sequence[MembershipContext],
+    target: MembershipContext,
+) -> bool:
+    """Read access to one membership: matrix grant whose scope reaches the target.
+
+    No rank check: viewing is not a write, so the §3.4 hierarchy rule does not apply.
+    """
+    scope = resolve_widest_scope(actor_memberships, "membership", "view")
+    if scope is None:
+        return False
+    return scope_covers(
+        scope=scope,
+        actor_memberships=actor_memberships,
+        target_person_id=target.person_id,
+        target_lc_id=target.lc_id,
+        target_function_id=target.function_id,
+        target_team_id=target.team_id,
+    )
+
+
 def can_extend_term(
     actor_memberships: Sequence[MembershipContext],
     target: MembershipContext,

@@ -7,6 +7,7 @@ from app.core.permissions import (
     can_add_member,
     can_extend_term,
     can_move_to_team,
+    can_view_membership,
     position_level,
     resolve_widest_scope,
 )
@@ -235,3 +236,21 @@ def test_level_mismatch_denied(lcp_context: MembershipContext) -> None:
 def test_position_level_mc_keys() -> None:
     assert position_level("mcvp") == "mc"
     assert position_level("lcvp") == "lc"
+
+
+def test_can_view_membership_lc_scope(
+    lcvp_context: MembershipContext, member_context: MembershipContext
+) -> None:
+    other_lc = MembershipContext(
+        membership_id=9,
+        person_id=90,
+        lc_id=101,
+        position_key="member",
+        position_rank=1,
+        function_id=5,
+    )
+    assert can_view_membership([lcvp_context], member_context) is True
+    assert can_view_membership([lcvp_context], other_lc) is False
+    # A plain member has no membership:view grant at all
+    assert can_view_membership([member_context], lcvp_context) is False
+    assert can_view_membership([], member_context) is False
