@@ -165,6 +165,10 @@ Then fill in `.env`:
 - **Postgres vars** (`POSTGRES_*`, `DATABASE_URL`) — leave the placeholder
   values as-is. The local database is a throwaway Docker container; these are
   not secrets.
+- **`DEV_ACTOR_HEADER_ENABLED`** — leave `false`. Setting it to `true` makes the
+  backend trust an `X-Actor-Email` request header as the signed-in user, so you can
+  `curl` the membership API before real sign-in (ticket 7) exists. Local use only:
+  never set it in a deployed environment. The tests do not need it.
 - **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
   from the shared store (below), not by asking in Slack.
 

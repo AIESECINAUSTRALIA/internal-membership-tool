@@ -15,6 +15,7 @@ import type {
   FunctionDef,
   IsoDate,
   Lc,
+  StateTimezone,
   Position,
   Scope,
   Team,
@@ -56,10 +57,22 @@ export const FUNCTIONS: FunctionDef[] = [
 ]
 
 export const LCS: Lc[] = [
-  { id: 'lc-usyd', name: 'USYD', type: 'lc' },
-  { id: 'lc-mu', name: 'MU', type: 'lc' },
-  { id: 'lc-unsw', name: 'UNSW', type: 'lc' },
-  { id: 'lc-mc', name: 'MC', type: 'mc' },
+  { id: 'lc-usyd', name: 'USYD', type: 'lc', state: 'NSW', active: true },
+  { id: 'lc-mu', name: 'MU', type: 'lc', state: 'VIC', active: true },
+  { id: 'lc-unsw', name: 'UNSW', type: 'lc', state: 'NSW', active: true },
+  { id: 'lc-mc', name: 'MC', type: 'mc', state: null, active: true },
+]
+
+/** The state → timezone lookup (§4.1). Same rows the backend seeds. */
+export const STATE_TIMEZONES: StateTimezone[] = [
+  { state: 'NSW', timezone: 'Australia/Sydney' },
+  { state: 'VIC', timezone: 'Australia/Melbourne' },
+  { state: 'QLD', timezone: 'Australia/Brisbane' },
+  { state: 'SA', timezone: 'Australia/Adelaide' },
+  { state: 'WA', timezone: 'Australia/Perth' },
+  { state: 'TAS', timezone: 'Australia/Hobart' },
+  { state: 'ACT', timezone: 'Australia/Sydney' },
+  { state: 'NT', timezone: 'Australia/Darwin' },
 ]
 
 export const TEAMS: Team[] = [
@@ -118,6 +131,13 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'analytics_report', 'export', 'all'),
   row(positionKey, 'function', 'manage', 'all'), // spec §2A.8: every MC position
   row(positionKey, 'odm', 'view', 'all'),
+  // Admin console (§2A.2): every MC position, so the capability is never held by one
+  // named person. `lc`/`person`/`audit_log` are admin-only resources, distinct from
+  // `member_record` (a person's own record) and `membership` (position history).
+  row(positionKey, 'admin_console', 'view', 'all'),
+  row(positionKey, 'lc', 'manage', 'all'),
+  row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'audit_log', 'view', 'all'),
 ]
 
 export const PERMISSION_MATRIX: MatrixRow[] = [

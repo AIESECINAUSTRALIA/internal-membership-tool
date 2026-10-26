@@ -1,7 +1,8 @@
 # Data model
 
 Explains the tables introduced in the initial schema migration
-(`backend/migrations/versions/0b11f06365cd_initial_schema.py`), for a reader
+(`backend/migrations/versions/0b11f06365cd_initial_schema.py`) and those added
+since (each section names its migration), for a reader
 with no prior context. See `docs/membership-tool-requirements-spec.md` §4.1
 for the source requirements — this doc explains the *implementation*, the
 spec explains the *why* at a product level.
@@ -13,6 +14,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `org.py` | `lc`, `term`, `position`, `function` |
 | `person.py` | `person` |
 | `membership.py` | `membership`, `team`, `team_member` |
+| `privacy.py` | `audit_log` (later also `deletion_request`) |
 | `attribute.py` | `attribute`, `attribute_value` |
 | `kpi.py` | `kpi_record` |
 
@@ -32,9 +34,54 @@ are uppercase (`'LC'` / `'MC'`), enforced by a `CHECK` constraint generated
 from `LCType` in `app/models/org.py`.
 
 - `name` is unique — two entities can't share a display name.
-- `active` is a soft-disable flag. An LC is never hard-deleted once it has
-  any history (memberships, teams, KPI records) pointing at it — see spec
-  §1.5.
+- `active` is a soft-disable flag. **LCs are never hard-deleted**: "delete"
+  in the Admin console means marking the LC inactive, and it can be marked
+  active again. Memberships, teams and KPI history keep pointing at an
+  inactive LC. Inactive LCs cannot receive new members or be merge targets.
+- `state` is the Australian state or territory (`NSW`, `VIC`, …). It is a
+  foreign key to `state_timezone`, so only known states can be stored. The
+  MC has no state.
+
+#### `state_timezone`
+
+A small lookup: state → IANA timezone (e.g. `NSW` → `Australia/Sydney`).
+Config data seeded by its migration, not editable at runtime. Sydney/Melbourne
+time (`Australia/Melbourne`) is the default when an LC has no state.
+
+#### How an LC's state reaches `person.timezone`
+
+`person.timezone` always comes from the LC of the person's **most recent
+active membership** (latest `start_date`), looked up through `lc.state` →
+`state_timezone`. `refresh_person_timezone` (`app/repositories/lc.py`) applies
+this rule. It runs when:
+
+- a member is added or transferred (`add_member`),
+- an LC's state is changed (everyone currently in that LC is refreshed),
+- LCs are merged.
+
+A person with no active membership keeps their last timezone.
+
+#### Merging two LCs
+
+`merge_lcs` merges a **source** LC into a **target** LC as of a merge date
+(default today). Nothing in the past is rewritten (spec §5.1), so reports for
+any earlier period do not change.
+
+| Record | What happens |
+|---|---|
+| Membership active at the merge date | Ended the day before the merge date. A new membership (same person, position, function, term, end date) opens in the target from the merge date. |
+| Membership that starts after the merge date | Pointed at the target LC. It has no history yet. |
+| Membership already ended | Untouched, stays under the source. |
+| **KPI records** | Untouched. They stay on the old membership, so they keep counting towards the **source** LC. KPIs logged after the merge go on the new membership and count towards the target. |
+| Team in a current or future term | Copied to the target (a target team with the same function, term and name is reused). The source team is left as it was. |
+| Team assignment (`team_member`) | Ended the day before the merge date, and a new one opens for the new membership in the target team. |
+| Team leader | Carried to the target team if it has no leader. If it already has one, the target's leader is kept and the merge result reports it. |
+| Team in a past term | Untouched. |
+| Source LC | Marked inactive. |
+| `person.timezone` | Refreshed for everyone moved. |
+
+Merging is refused if the LCs are the same, either is inactive or the MC. Each
+ended or opened membership and the merge itself are audit-logged.
 
 ### `term`
 
@@ -129,6 +176,64 @@ exist before a leader is assigned).
 Join table between `membership` and `team`. Time-scoped the same way as
 `membership` (`start_date`/`end_date`, no in-place mutation) so team history
 is preserved the same way membership history is.
+
+### `audit_log`
+
+Added by `backend/migrations/versions/4566b47c3298_add_audit_log.py`. One row
+per privacy/config action or sign-in (spec §8.4): who acted
+(`actor_membership_id`, or `actor_person_id` for sign-ins, which happen
+before a membership is chosen; both null for `system`), what they did
+(`action`, e.g. `kpi_record.edit`), to what (`resource_type`, `resource_id`),
+a one-line `summary`, an optional JSON `diff` of before/after, and
+`created_at`.
+
+**Writing to it.** Always call `app.core.audit.record_audit(session, ...)`.
+It adds the entry to the caller's session without committing, so the entry
+is saved if and only if the change it describes is saved. `diff` must never
+contain personal data. Entries can't be edited or deleted, so a leak there
+is permanent.
+
+**No foreign keys on the actor columns.** Spec §8.3 says that when a person
+is hard-deleted, the log is kept and its actor ids are left dangling on
+purpose. A foreign key would either block that delete, or (with
+`ON DELETE SET NULL`) try to update `audit_log`, which the database rejects
+(see below).
+
+**Append-only, enforced by the database.** The migration installs two
+triggers that call `audit_log_block_mutation()`, a function that only ever
+raises an error:
+
+- `audit_log_no_update_or_delete`: `BEFORE UPDATE OR DELETE`, per row.
+- `audit_log_no_truncate`: `BEFORE TRUNCATE`, per statement. Row-level
+  triggers don't fire on `TRUNCATE`, so without this one the whole log could
+  be emptied without any error.
+
+Both triggers are set to `ENABLE ALWAYS`. Without that, a session could run
+`SET session_replication_role = replica`, which normally switches triggers
+off, and then edit the log with no schema change at all.
+
+`INSERT` and `SELECT` are unaffected. `backend/tests/test_audit_log.py`
+attempts each blocked statement with raw SQL and asserts it's rejected.
+
+**Why a trigger and not `GRANT`/`REVOKE`.** The textbook approach is to give
+the app a login role with only `INSERT`/`SELECT` on this table. That does
+nothing here, because the app connects as the **owner** of the tables (the
+`POSTGRES_USER` in `DATABASE_URL`). In local Docker and CI, that user is
+also a **superuser**. Postgres never applies privilege checks to superusers,
+and an owner can always grant privileges back to itself. A trigger fires for
+every role, owner and superuser included. It lives entirely in one
+migration, so there's no change to `DATABASE_URL`, Docker Compose, CI or the
+hosted database's role setup.
+
+**What it doesn't stop.** Someone with DDL rights (the owner) can still
+`DROP TRIGGER`, `ALTER TABLE ... DISABLE TRIGGER` or `DROP TABLE`, and a
+migration downgrade past this revision drops the table, taking the log with it.
+That can't happen by accident: it's a deliberate schema change and would have
+to go through a migration and code review. If stronger protection is ever
+needed, the next step is a separate least-privilege login role for the app
+(no DDL, only `INSERT`/`SELECT` here), with the owner role reserved for
+migrations. That changes how every environment connects, so it's a
+deploy-time hardening task, not part of this table.
 
 ## EAV: `attribute` + `attribute_value`
 
@@ -293,8 +398,8 @@ the same PR.
 |---|---|---|
 | `person` contact data | `personal_email` and `phone` columns | Removed. Only `aiesec_email` is collected (spec §4.1, §10) |
 | `person` name | One `full_name` column | First and last name (spec §2A.5) |
-| `person.timezone` | Absent | Added, set from the LC's state (spec §4.1) |
-| `lc.state` | Absent | Added (nullable), plus a `state_timezone` lookup table (spec §4.1) |
+| `person.timezone` | Added, set from the LC of the most recent membership | Same (spec §4.1) |
+| `lc.state` | Added (nullable, FK to `state_timezone`) | Same (spec §4.1) |
 | `membership.end_date` | Nullable | Required when adding a membership (spec §5.3) |
 | `position.rank` | Lower number = more senior (LCP = 1) | Higher number = higher position (Member = 1 … MCP = 7) (spec §2) |
 | `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
@@ -310,9 +415,10 @@ Two things to watch when fixing the seeds:
 - `lc.type` is stored as `'LC'` / `'MC'` (uppercase). The spec's lowercase
   `lc` / `mc` is informal wording, so keep the implemented values.
 
-The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record`,
-`audit_log` and `deletion_request` tables are not built yet. Their model files
-under `backend/app/models/` are empty stubs. Build them to the spec directly.
+The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record` and
+`deletion_request` tables are not built yet. Their model files under
+`backend/app/models/` are empty stubs (`deletion_request` goes in `privacy.py`,
+next to `audit_log`). Build them to the spec directly.
 
 ## Repository layer
 
