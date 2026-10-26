@@ -44,16 +44,19 @@ class MemberSummaryRow(BaseModel):
 
 
 class Page[T](BaseModel):
-    items: list[T]
+    rows: list[T]
     total: int
-    page: int
-    pageSize: int
+
+
+class MemberSort(BaseModel):
+    field: Literal["firstName", "lastName", "lc", "position"]
+    direction: Literal["asc", "desc"]
 
 
 class MemberQuery(BaseModel):
     search: str = ""
-    sortField: Literal["firstName", "lastName", "lc", "position"] = "lastName"
-    sortDirection: Literal["asc", "desc"] = "asc"
+    # null = no explicit sort: the server falls back to last name, ascending.
+    sort: MemberSort | None = None
     page: int = 0
     pageSize: int = 15
     lcId: str | None = None

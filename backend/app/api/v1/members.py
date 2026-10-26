@@ -35,19 +35,14 @@ def list_members(
         db,
         actor_contexts,
         search=query.search,
-        sort_field=query.sortField,
-        sort_direction=query.sortDirection,
+        sort_field=query.sort.field if query.sort else "lastName",
+        sort_direction=query.sort.direction if query.sort else "asc",
         page=query.page,
         page_size=query.pageSize,
         filter_lc_id=filter_lc_id,
     )
 
-    return Page[MemberSummaryRow](
-        items=result["rows"],
-        total=result["total"],
-        page=query.page,
-        pageSize=query.pageSize,
-    )
+    return Page[MemberSummaryRow](rows=result["rows"], total=result["total"])
 
 
 @router.post("", response_model=AddMemberResult)

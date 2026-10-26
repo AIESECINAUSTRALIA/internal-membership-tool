@@ -225,11 +225,11 @@ def test_list_members_lc_isolation_and_no_email(
     data = resp.json()
 
     # Total must only contain USYD members (LCVP is in USYD). MU members are isolated.
-    assert any("test-usyd" in item["lc"]["name"] for item in data["items"])
-    assert not any("test-mu" in item["lc"]["name"] for item in data["items"])
+    assert any("test-usyd" in item["lc"]["name"] for item in data["rows"])
+    assert not any("test-mu" in item["lc"]["name"] for item in data["rows"])
 
     # Personal contact data (email) is never exposed in summary rows
-    for item in data["items"]:
+    for item in data["rows"]:
         assert "email" not in item
         assert "phone" not in item
 
@@ -528,7 +528,7 @@ def test_actor_without_membership_gets_nothing(
 
     listed = client.post("/api/v1/members/summary", json={})
     assert listed.status_code == 200
-    assert listed.json()["items"] == []
+    assert listed.json()["rows"] == []
     assert listed.json()["total"] == 0
 
     assert client.get(f"/api/v1/members/{target}").status_code == 404
@@ -656,7 +656,7 @@ def test_team_leader_sees_whole_lc_in_list_and_detail(client_with_actor: Fixture
     app.dependency_overrides[get_current_actor] = lambda: actor_map["tl"]
 
     listed = client.post("/api/v1/members/summary", json={})
-    names = {item["lc"]["name"] for item in listed.json()["items"]}
+    names = {item["lc"]["name"] for item in listed.json()["rows"]}
     assert names == {"test-usyd"}
 
     # A member of another team in the same LC is viewable, another LC's is not.
@@ -686,7 +686,68 @@ def test_list_uses_most_recent_membership_for_lc_and_roles(
 
     resp = client.post("/api/v1/members/summary", json={"search": "Mover"})
 
-    (row,) = resp.json()["items"]
+    (row,) = resp.json()["rows"]
     assert row["lc"]["name"] == "test-usyd"
     assert [r["membershipId"] for r in row["roles"]] == [str(newer.id)]
     assert row["roles"][0]["position"]["key"] == "team_leader"
+
+
+# ---------------------------------------------------------------------------
+# Test: request/response shapes match frontend/src/api/types.ts exactly
+# ---------------------------------------------------------------------------
+
+
+def test_list_response_is_rows_and_total_only(client_with_actor: Fixture) -> None:
+    client, _, _ = client_with_actor
+    resp = client.post("/api/v1/members/summary", json={})
+    assert set(resp.json()) == {"rows", "total"}
+
+
+def test_list_honours_nested_sort_object(client_with_actor: Fixture) -> None:
+    client, _, _ = client_with_actor
+
+    def first_names(direction: str) -> list[str]:
+        resp = client.post(
+            "/api/v1/members/summary",
+            json={
+                "search": "",
+                "sort": {"field": "firstName", "direction": direction},
+                "page": 0,
+                "pageSize": 15,
+                "lcId": None,
+            },
+        )
+        assert resp.status_code == 200
+        return [row["firstName"] for row in resp.json()["rows"]]
+
+    assert first_names("asc") == ["LCVP", "TL", "USYD"]
+    assert first_names("desc") == ["USYD", "TL", "LCVP"]
+
+
+def test_list_accepts_null_sort(client_with_actor: Fixture) -> None:
+    client, _, _ = client_with_actor
+    resp = client.post("/api/v1/members/summary", json={"sort": None})
+    assert resp.status_code == 200
+    assert resp.json()["total"] == 3
+
+
+def test_add_and_move_accept_string_ids_like_the_frontend_sends(
+    client_with_actor: Fixture,
+) -> None:
+    client, _, seed = client_with_actor
+    added = client.post(
+        "/api/v1/members",
+        json=_add_payload(
+            seed,
+            lcId=str(seed.lc_usyd.id),
+            termId=str(seed.term.id),
+            teamId=str(seed.team_a.id),
+        ),
+    )
+    assert added.json()["status"] == "created"
+
+    moved = client.post(
+        f"/api/v1/members/{seed.m_member_usyd.id}/move-to-team",
+        json={"teamId": str(seed.team_b.id)},
+    )
+    assert moved.json()["status"] == "ok"
