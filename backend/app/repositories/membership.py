@@ -1,6 +1,12 @@
 """Membership repository queries and lifecycle mutations.
 
 Implements Spec §2A.5, §3.4, §3.6, §5.1, and §8.4.
+
+"Current membership" is never a stored flag — it's derived from
+`start_date`/`end_date` at query time (spec §4.1, §5.1), so a membership
+change (position, function, team, leaving) only ever needs an end-date on the
+old row and a new row, never an update to some `is_current` column that could
+drift out of sync.
 """
 
 from collections.abc import Sequence
@@ -26,7 +32,13 @@ from app.models.person import Person, PersonStatus
 def get_active_memberships_for_person(
     session: Session, person_id: int, as_of: date | None = None
 ) -> Sequence[Membership]:
-    """Memberships for person_id that are current as of as_of (default: today)."""
+    """Memberships for `person_id` that are current as of `as_of` (default: today).
+
+    A membership is current when it has started (`start_date <= as_of`) and
+    either has no end date yet or hasn't ended (`end_date IS NULL OR
+    end_date >= as_of`). A person can hold several concurrent memberships
+    (spec §5.1), so this can return more than one row.
+    """
     ref_date = as_of if as_of is not None else date.today()
     stmt = select(Membership).where(
         Membership.person_id == person_id,

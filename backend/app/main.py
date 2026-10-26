@@ -1,4 +1,9 @@
-"""FastAPI application entrypoint."""
+"""FastAPI application entrypoint.
+
+Creates the app, configures CORS for the local Vite dev server, and mounts the
+versioned API routers from `app/api/router.py`. Endpoints themselves live under
+`app/api/v1/`; this file stays thin.
+"""
 
 import os
 
@@ -10,6 +15,7 @@ from app.api.router import api_router
 app = FastAPI(title="AIESEC Australia — Membership Tool API")
 
 # Allow the local Vite dev server to call the API during development.
+# Replaced by a config-driven allowlist in app/config.py during implementation.
 _frontend_origin = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
