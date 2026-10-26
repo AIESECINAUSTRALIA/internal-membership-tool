@@ -48,7 +48,9 @@ export function MembershipPage() {
   )
   // "Loading" is derived: the last answer belongs to a different question than the current one.
   const queryKey = JSON.stringify([query, reloadCount])
-  const [result, setResult] = useState<{ key: string; page: Page<MemberSummaryRow> } | null>(null)
+  const [result, setResult] = useState<{ key: string; page: Page<MemberSummaryRow>; failed?: boolean } | null>(
+    null,
+  )
   const loading = result?.key !== queryKey
 
   const [adding, setAdding] = useState(false)
@@ -58,9 +60,16 @@ export function MembershipPage() {
 
   useEffect(() => {
     let cancelled = false
-    api.listMembers(query).then((page) => {
-      if (!cancelled) setResult({ key: queryKey, page })
-    })
+    api.listMembers(query).then(
+      (page) => {
+        if (!cancelled) setResult({ key: queryKey, page })
+      },
+      // Show an error instead of loading forever (e.g. real Google sign-in while the
+      // member list still comes from the mock, docs/auth.md).
+      () => {
+        if (!cancelled) setResult({ key: queryKey, page: { rows: [], total: 0 }, failed: true })
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -165,6 +174,10 @@ export function MembershipPage() {
           </TextField>
         )}
       </Stack>
+
+      {result?.failed && !loading && (
+        <Alert severity="error">The member list could not be loaded. Please try again later.</Alert>
+      )}
 
       <Box>
         <DataGrid
