@@ -24,11 +24,12 @@ from app.core.permissions import (
     can_extend_term,
     can_move_to_team,
     can_view_membership,
+    get_acting_membership,
     position_level,
     resolve_widest_scope,
 )
 from app.models.membership import Membership, Team, TeamMember
-from app.models.org import LC, Function, Position
+from app.models.org import LC, Function, Position, Term
 from app.models.person import Person, PersonStatus
 
 
@@ -55,6 +56,32 @@ def _position_rank(pos: Position | None) -> int:
     """`position.rank` when populated, else the spec §2 fallback by key."""
     pos_key = pos.key if pos else "member"
     return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+
+
+def _audit_actor(actor_memberships: Sequence[MembershipContext]) -> dict[str, int | None]:
+    """Who to name on an audit row: the actor's highest-ranking membership and their person."""
+    acting = get_acting_membership(actor_memberships)
+    return {
+        "actor_membership_id": acting.membership_id if acting else None,
+        "actor_person_id": acting.person_id if acting else None,
+    }
+
+
+def _resolve_term_id(session: Session, term_id: int | None, start_date: date) -> int | None:
+    """The term a new membership belongs to, or None if there isn't a valid one.
+
+    An explicit `term_id` must exist; otherwise the term covering `start_date`
+    (the latest-starting one if several overlap).
+    """
+    if term_id is not None:
+        return term_id if session.get(Term, term_id) else None
+    stmt = (
+        select(Term.id)
+        .where(Term.start_date <= start_date, Term.end_date >= start_date)
+        .order_by(Term.start_date.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
 
 
 def build_membership_context(session: Session, membership: Membership) -> MembershipContext:
@@ -327,6 +354,10 @@ def add_member(
     if not allowed:
         return {"status": "rejected", "message": reason}
 
+    resolved_term_id = _resolve_term_id(session, term_id, start_date)
+    if resolved_term_id is None:
+        return {"status": "rejected", "message": "No term covers that start date."}
+
     clean_email = email.strip().lower()
 
     # Check if person exists
@@ -415,19 +446,15 @@ def add_member(
             old_m.end_date = new_end
             session.flush()
 
-            acting = actor_memberships[0] if actor_memberships else None
             record_audit(
                 session,
                 action="membership.end_term",
                 resource_type="membership",
                 resource_id=old_m.id,
                 summary="Membership ended automatically due to transfer to another LC",
-                actor_membership_id=acting.membership_id if acting else None,
+                **_audit_actor(actor_memberships),
                 diff={"before": str(old_end), "after": str(new_end)},
             )
-
-    # Resolve term_id if not provided
-    resolved_term_id = term_id or 1
 
     # Insert new membership
     new_membership = Membership(
@@ -453,14 +480,13 @@ def add_member(
         session.flush()
 
     # Record audit log for membership creation
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="membership.create",
         resource_type="membership",
         resource_id=new_membership.id,
         summary=f"Added member to LC {lc.name}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"after": {"lc_id": lc.id, "position_id": pos.id, "start_date": str(start_date)}},
     )
 
@@ -494,14 +520,13 @@ def extend_term(
     m.end_date = new_end_date
     session.flush()
 
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="membership.extend_term",
         resource_type="membership",
         resource_id=m.id,
         summary=f"Extended term of membership {m.id}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"before": str(old_end), "after": str(new_end_date)},
     )
 
@@ -558,14 +583,13 @@ def move_to_team(
     session.add(new_tm)
     session.flush()
 
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="team_member.move",
         resource_type="team_member",
         resource_id=new_tm.id,
         summary=f"Moved membership {m.id} to team {new_team.name}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"before": {"team_id": old_team_id}, "after": {"team_id": new_team.id}},
     )
 

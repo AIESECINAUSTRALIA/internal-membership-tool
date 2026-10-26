@@ -541,3 +541,71 @@ def test_actor_without_membership_gets_nothing(
 
     added = client.post("/api/v1/members", json=_add_payload(seed))
     assert added.json()["status"] == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Test: term resolution and audit actor
+# ---------------------------------------------------------------------------
+
+
+def test_add_member_resolves_term_from_start_date(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    payload = _add_payload(seed, startDate="2026-11-01")
+    del payload["termId"]
+
+    resp = client.post("/api/v1/members", json=payload)
+
+    assert resp.json()["status"] == "created"
+    created = db_session.execute(
+        select(Membership).join(Person).where(Person.aiesec_email == payload["email"])
+    ).scalar_one()
+    assert created.term_id == seed.term.id
+
+
+def test_add_member_rejects_date_outside_any_term(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    payload = _add_payload(seed, startDate="2099-01-01", endDate="2099-06-30")
+    del payload["termId"]
+
+    resp = client.post("/api/v1/members", json=payload)
+
+    assert resp.json() == {"status": "rejected", "message": "No term covers that start date."}
+
+
+def test_add_member_rejects_unknown_term_id(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, termId=999_999_999))
+    assert resp.json() == {"status": "rejected", "message": "No term covers that start date."}
+
+
+def test_audit_records_acting_membership_and_person(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    # Two hats, lower-ranked listed first: the audit row must name the LCVP one.
+    low = _membership(
+        db_session, seed.p_lcvp, seed.lc_usyd, seed.pos_member, seed.fn_ogv, seed.term
+    )
+    two_hats = CurrentActor(
+        person=seed.p_lcvp,
+        active_memberships=[low, seed.m_lcvp],
+        acting_membership=seed.m_lcvp,
+    )
+    app.dependency_overrides[get_current_actor] = lambda: two_hats
+
+    resp = client.post(
+        f"/api/v1/members/{seed.m_member_usyd.id}/extend-term",
+        json={"newEndDate": "2027-06-30"},
+    )
+    assert resp.json()["status"] == "ok"
+
+    entry = db_session.execute(
+        select(AuditLog).where(
+            AuditLog.resource_id == seed.m_member_usyd.id,
+            AuditLog.action == "membership.extend_term",
+        )
+    ).scalar_one()
+    assert entry.actor_membership_id == seed.m_lcvp.id
+    assert entry.actor_person_id == seed.p_lcvp.id
