@@ -29,8 +29,17 @@ POSITION_RANKS: dict[str, int] = {
     "mcp": 7,
 }
 
+MC_POSITIONS: set[str] = {"mcd", "mcvp", "mcp"}
 PRESIDENTIAL_POSITIONS: set[str] = {"lcp", "mcp"}
 TEAM_HOLDING_POSITIONS: set[str] = {"member", "team_leader"}
+
+
+def position_level(position_key: str) -> Literal["lc", "mc"]:
+    """Which kind of entity a position belongs to (Spec §3.6).
+
+    Fallback until ticket 2 adds `position.level`, same pattern as `POSITION_RANKS`.
+    """
+    return "mc" if position_key in MC_POSITIONS else "lc"
 
 
 def scope_rank(scope: Scope) -> int:

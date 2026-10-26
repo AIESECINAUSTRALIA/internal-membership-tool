@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentActor, get_current_actor, get_db
@@ -103,6 +103,7 @@ class Seed:
     pos_tl: Position
     pos_lcvp: Position
     pos_lcp: Position
+    pos_mcvp: Position
     team_a: Team
     team_b: Team
     p_lcvp: Person
@@ -136,6 +137,7 @@ def client_with_actor(
     pos_tl = _get_or_create(db_session, Position, key="team_leader", label="Team Leader", rank=2)
     pos_lcvp = _get_or_create(db_session, Position, key="lcvp", label="LCVP", rank=3)
     pos_lcp = _get_or_create(db_session, Position, key="lcp", label="LCP", rank=4)
+    pos_mcvp = _get_or_create(db_session, Position, key="mcvp", label="MCVP", rank=6)
 
     team_a = Team(lc_id=lc_usyd.id, function_id=fn_ogv.id, term_id=term.id, name="test-oGV A")
     team_b = Team(lc_id=lc_usyd.id, function_id=fn_ogv.id, term_id=term.id, name="test-oGV B")
@@ -171,6 +173,7 @@ def client_with_actor(
         pos_tl=pos_tl,
         pos_lcvp=pos_lcvp,
         pos_lcp=pos_lcp,
+        pos_mcvp=pos_mcvp,
         team_a=team_a,
         team_b=team_b,
         p_lcvp=p_lcvp,
@@ -400,3 +403,94 @@ def test_get_membership_detail(
     # teamOptions should offer team 2 (oGV Team B) in the same function and LC
     assert len(data["teamOptions"]) == 1
     assert data["teamOptions"][0]["name"] == "test-oGV B"
+
+
+# ---------------------------------------------------------------------------
+# Test: addMember enforces both §3.4 checks before anything else
+# ---------------------------------------------------------------------------
+
+
+def _add_payload(seed: Seed, **overrides: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "email": "test-new-person@aiesec.net",
+        "firstName": "New",
+        "lastName": "Person",
+        "lcId": seed.lc_usyd.id,
+        "positionKey": "member",
+        "functionKey": "ogv",
+        "termId": seed.term.id,
+        "startDate": "2026-07-01",
+        "endDate": "2026-12-31",
+        "confirmedExisting": False,
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _create_audit_count(db_session: Session) -> int:
+    return (
+        db_session.scalar(
+            select(func.count()).select_from(AuditLog).where(AuditLog.action == "membership.create")
+        )
+        or 0
+    )
+
+
+def test_add_member_denied_for_plain_member(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, actor_map, seed = client_with_actor
+    app.dependency_overrides[get_current_actor] = lambda: actor_map["member"]
+
+    # The email belongs to an existing person: a denied actor must not learn that.
+    resp = client.post(
+        "/api/v1/members",
+        json=_add_payload(seed, email=seed.p_member_mu.aiesec_email),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "rejected"
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_denied_outside_lc(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, lcId=seed.lc_mu.id))
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "You cannot add people outside your scope.",
+    }
+
+
+def test_add_member_denied_equal_rank(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, positionKey="lcvp"))
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "You cannot add someone of equal or higher rank.",
+    }
+
+
+def test_add_member_denied_mc_position_in_lc(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, positionKey="mcvp"))
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "Position level does not match LC type.",
+    }
+
+
+def test_add_member_unknown_function_rejected(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, functionKey="nope"))
+    assert resp.json() == {"status": "rejected", "message": "Function not found."}
+
+
+def test_add_member_allowed_new_person(client_with_actor: Fixture, db_session: Session) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+    assert resp.json()["status"] == "created"
+    created = db_session.execute(
+        select(Person).where(Person.aiesec_email == "test-new-person@aiesec.net")
+    ).scalar_one_or_none()
+    assert created is not None
+    assert _create_audit_count(db_session) == 1

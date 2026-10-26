@@ -7,6 +7,7 @@ from app.core.permissions import (
     can_add_member,
     can_extend_term,
     can_move_to_team,
+    position_level,
     resolve_widest_scope,
 )
 
@@ -229,3 +230,8 @@ def test_level_mismatch_denied(lcp_context: MembershipContext) -> None:
     assert allowed is False
     assert msg is not None
     assert "level" in msg.lower()
+
+
+def test_position_level_mc_keys() -> None:
+    assert position_level("mcvp") == "mc"
+    assert position_level("lcvp") == "lc"

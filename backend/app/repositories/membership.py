@@ -20,8 +20,10 @@ from app.core.audit import record_audit
 from app.core.permissions import (
     POSITION_RANKS,
     MembershipContext,
+    can_add_member,
     can_extend_term,
     can_move_to_team,
+    position_level,
     resolve_widest_scope,
 )
 from app.models.membership import Membership, Team, TeamMember
@@ -48,11 +50,17 @@ def get_active_memberships_for_person(
     return session.execute(stmt).scalars().all()
 
 
+def _position_rank(pos: Position | None) -> int:
+    """`position.rank` when populated, else the spec §2 fallback by key."""
+    pos_key = pos.key if pos else "member"
+    return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+
+
 def build_membership_context(session: Session, membership: Membership) -> MembershipContext:
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
     pos_key = pos.key if pos else "member"
-    rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    rank = _position_rank(pos)
     can_add_same_rank = getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"})
 
     lc = session.get(LC, membership.lc_id)
@@ -189,7 +197,7 @@ def list_members_summary(
             pos = positions.get(m.position_id)
             fn = functions.get(m.function_id) if m.function_id else None
             pos_key = pos.key if pos else "member"
-            rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+            rank = _position_rank(pos)
 
             roles_payload.append(
                 {
@@ -300,6 +308,23 @@ def add_member(
         func = session.execute(
             select(Function).where(Function.key == function_key)
         ).scalar_one_or_none()
+        if func is None:
+            return {"status": "rejected", "message": "Function not found."}
+
+    # Authorise before touching the person table: a denied actor must not be able
+    # to probe which emails exist (via `confirm_existing`). Spec §3.4, §3.6.
+    allowed, reason = can_add_member(
+        actor_memberships,
+        target_lc_id=lc.id,
+        target_lc_type=lc.type.value,
+        target_position_key=pos.key,
+        target_position_rank=_position_rank(pos),
+        target_position_level=position_level(pos.key),
+        target_function_id=func.id if func else None,
+        target_team_id=team_id,
+    )
+    if not allowed:
+        return {"status": "rejected", "message": reason}
 
     clean_email = email.strip().lower()
 
@@ -586,7 +611,7 @@ def get_membership_detail(
     team_options = session.execute(teams_stmt).scalars().all()
 
     pos_key = pos.key if pos else "member"
-    rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    rank = _position_rank(pos)
 
     return {
         "membershipId": str(m.id),
