@@ -1,7 +1,7 @@
 """lc_state_and_state_timezone
 
 Revision ID: ae6e461ef689
-Revises: b4a513ff0425
+Revises: a1b2c3d4e5f6
 Create Date: 2026-10-19 01:24:16.994927
 
 """
@@ -13,7 +13,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "ae6e461ef689"
-down_revision: str | Sequence[str] | None = "b4a513ff0425"
+down_revision: str | Sequence[str] | None = "a1b2c3d4e5f6"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

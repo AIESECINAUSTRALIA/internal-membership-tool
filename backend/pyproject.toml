@@ -29,7 +29,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-# B008: FastAPI's Depends() in argument defaults is the intended pattern
+# B008 is FastAPI's standard Depends() pattern in endpoint parameter defaults
 ignore = ["B008"]
 
 [tool.mypy]

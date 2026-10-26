@@ -1,10 +1,8 @@
-"""FastAPI application entrypoint — minimal starter.
+"""FastAPI application entrypoint.
 
-Just enough to serve the API locally during development: a root greeting and a
-liveness probe. Real configuration (Pydantic Settings), the database session,
-routers, and auth arrive in the implementation phase — see the spec §8 and the
-setup runbook §7 in
-``docs/superpowers/specs/2026-09-02-project-skeleton-design.md``.
+Creates the app, configures CORS for the local Vite dev server, and mounts the
+versioned API routers from `app/api/router.py`. Endpoints themselves live under
+`app/api/v1/`; this file stays thin.
 """
 
 import os
@@ -15,8 +13,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.router import api_router
 
 app = FastAPI(title="AIESEC Australia — Membership Tool API")
-
-app.include_router(api_router)
 
 # Allow the local Vite dev server to call the API during development.
 # Replaced by a config-driven allowlist in app/config.py during implementation.
@@ -29,6 +25,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(api_router)
+
 
 @app.get("/")
 def read_root() -> dict[str, str]:
@@ -37,5 +35,5 @@ def read_root() -> dict[str, str]:
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    """Liveness probe. A database readiness check is added with app/db/session.py."""
+    """Liveness probe."""
     return {"status": "ok"}
