@@ -354,6 +354,12 @@ def add_member(
     if not allowed:
         return {"status": "rejected", "message": reason}
 
+    # Same rule as moveToTeam: a team must belong to the target LC and function.
+    if team_id is not None:
+        team = session.get(Team, team_id)
+        if team is None or team.lc_id != lc.id or team.function_id != (func.id if func else None):
+            return {"status": "rejected", "message": "Choose a team in the same LC and function."}
+
     resolved_term_id = _resolve_term_id(session, term_id, start_date)
     if resolved_term_id is None:
         return {"status": "rejected", "message": "No term covers that start date."}

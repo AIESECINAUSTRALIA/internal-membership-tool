@@ -609,3 +609,38 @@ def test_audit_records_acting_membership_and_person(
     ).scalar_one()
     assert entry.actor_membership_id == seed.m_lcvp.id
     assert entry.actor_person_id == seed.p_lcvp.id
+
+
+def test_add_member_rejects_team_from_another_lc(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    foreign_team = Team(
+        lc_id=seed.lc_mu.id, function_id=seed.fn_ogv.id, term_id=seed.term.id, name="test-mu team"
+    )
+    db_session.add(foreign_team)
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed, teamId=foreign_team.id))
+
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "Choose a team in the same LC and function.",
+    }
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(TeamMember)
+            .where(TeamMember.team_id == foreign_team.id)
+        )
+        == 0
+    )
+
+
+def test_add_member_rejects_unknown_team(client_with_actor: Fixture) -> None:
+    client, _, seed = client_with_actor
+    resp = client.post("/api/v1/members", json=_add_payload(seed, teamId=999_999_999))
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "Choose a team in the same LC and function.",
+    }
