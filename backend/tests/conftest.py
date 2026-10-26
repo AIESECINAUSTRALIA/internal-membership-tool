@@ -33,7 +33,7 @@ def db_session() -> Generator[Session, None, None]:
     """A session bound to a connection-level transaction that's rolled back."""
     connection = _test_engine.connect()
     transaction = connection.begin()
-    session = Session(bind=connection)
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
     try:
         yield session

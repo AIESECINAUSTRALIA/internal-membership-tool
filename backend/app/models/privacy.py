@@ -2,8 +2,11 @@
 
 `deletion_request` (spec §8) also belongs here; it isn't built yet.
 
-`audit_log` is append-only: write entries through `app.core.audit.record_audit`,
-never by building `AuditLog` rows by hand.
+`audit_log` is **append-only, enforced by the database**: the migration that
+creates it installs triggers that reject every `UPDATE`, `DELETE` and
+`TRUNCATE`, whichever role is connected. See `docs/data-model.md` → "audit_log"
+for why a trigger rather than `GRANT`s. Write entries through
+`app.core.audit.record_audit`, never by building `AuditLog` rows by hand.
 """
 
 from datetime import datetime

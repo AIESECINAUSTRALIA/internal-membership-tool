@@ -1,0 +1,131 @@
+"""Write path and rollup queries for `kpi_record` (spec §4.3).
+
+`record_kpi` is the only place a `kpi_record` row should be created — it
+enforces the one thing a plain FK can't (`attribute_id` must point at an
+`applies_to = 'kpi'` attribute), applies `attribute.validation`, and resolves
+the denormalised `team_id` once at write time. Route new call sites through
+it rather than constructing rows directly.
+"""
+
+from collections.abc import Sequence
+from datetime import UTC, date, datetime
+from typing import Any
+
+from sqlalchemy import func, or_, select
+from sqlalchemy.orm import Session
+
+from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
+from app.models.kpi import KpiRecord, KpiSource
+from app.models.membership import Membership, TeamMember
+from app.models.org import Function
+from app.repositories.attribute import AttributeValidationError, validate_and_coerce
+
+
+def _resolve_team_id(session: Session, membership_id: int, as_of: date) -> int | None:
+    """The team `membership_id` belonged to as of `as_of`. A point-in-time
+    snapshot taken once at write time (spec §4.3) — a later team move does
+    not rewrite past `kpi_record` rows, matching the append-only history
+    convention `membership`/`team_member` already use. None if the member
+    wasn't on a team as of that date.
+
+    `end_date` is inclusive, so on a handoff day (old team ends the same day
+    the new one starts) two rows match. The most recently started team wins;
+    `id` breaks any remaining tie, so the result never depends on the order
+    Postgres happens to return rows in."""
+    stmt = (
+        select(TeamMember.team_id)
+        .where(
+            TeamMember.membership_id == membership_id,
+            TeamMember.start_date <= as_of,
+            or_(TeamMember.end_date.is_(None), TeamMember.end_date >= as_of),
+        )
+        .order_by(TeamMember.start_date.desc(), TeamMember.id.desc())
+    )
+    return session.execute(stmt).scalars().first()
+
+
+def record_kpi(
+    session: Session,
+    *,
+    attribute: Attribute,
+    membership_id: int,
+    value_number: float,
+    period_start: date,
+    period_end: date,
+    source: KpiSource,
+    recorded_by_membership_id: int,
+    note: str | None = None,
+) -> KpiRecord:
+    """Insert one `kpi_record` row.
+
+    `attribute` must be a KPI-type attribute (`applies_to = 'kpi'`) — a plain
+    FK can't express that condition, so it's checked here instead of at the
+    DB layer (see docs/data-model.md).
+    """
+    if attribute.applies_to != AttributeAppliesTo.KPI:
+        raise AttributeValidationError(
+            f"{attribute.key} is not a KPI attribute (applies_to={attribute.applies_to})"
+        )
+    # kpi_record only has value_number, so a KPI must be numeric.
+    if attribute.data_type != AttributeDataType.NUMBER:
+        raise AttributeValidationError(
+            f"{attribute.key}: KPI attributes must have data_type 'number', "
+            f"not {attribute.data_type.value!r}"
+        )
+    # Shared with attribute_value writes; the returned column mapping isn't
+    # needed here, only the type check and min/max rules (raises on failure).
+    validate_and_coerce(attribute, value_number)
+
+    record = KpiRecord(
+        attribute_id=attribute.id,
+        membership_id=membership_id,
+        team_id=_resolve_team_id(session, membership_id, period_start),
+        value_number=value_number,
+        period_start=period_start,
+        period_end=period_end,
+        source=source,
+        note=note,
+        recorded_by=recorded_by_membership_id,
+        recorded_at=datetime.now(UTC),
+    )
+    session.add(record)
+    session.flush()
+    return record
+
+
+def sum_by_function(
+    session: Session,
+    *,
+    lc_id: int,
+    attribute_id: int,
+    period_start: date,
+    period_end: date,
+) -> Sequence[Any]:
+    """`SUM(value_number)` for one KPI within one LC, grouped by function,
+    over every `kpi_record` whose period **overlaps** `[period_start,
+    period_end]` — not only records fully contained in it, since a
+    dashboard's custom range (spec §6) won't usually line up exactly with
+    recorded periods.
+
+    Returns `(function_key, function_label, total)` rows; a function with no
+    matching records is simply absent, not returned with a zero total.
+
+    Records from memberships with no function (`function_id` is NULL, e.g.
+    LCP) are grouped into a single `(None, None, total)` row rather than
+    dropped, so the per-function totals always add up to the LC total.
+    """
+    stmt = (
+        select(Function.key, Function.label, func.sum(KpiRecord.value_number))
+        .join(Membership, Membership.id == KpiRecord.membership_id)
+        # Outer join: an inner join would silently drop records from
+        # memberships whose function_id is NULL.
+        .outerjoin(Function, Function.id == Membership.function_id)
+        .where(
+            Membership.lc_id == lc_id,
+            KpiRecord.attribute_id == attribute_id,
+            KpiRecord.period_start <= period_end,
+            KpiRecord.period_end >= period_start,
+        )
+        .group_by(Function.key, Function.label)
+    )
+    return session.execute(stmt).all()
