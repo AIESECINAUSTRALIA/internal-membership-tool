@@ -2,6 +2,9 @@
 
 Supports PostgreSQL via `DATABASE_URL` as well as an in-memory SQLite fallback
 for running unit and API tests in environments without a live PostgreSQL service.
+
+Each test gets its own fresh in-memory SQLite database (via a per-invocation
+engine) so hardcoded IDs in one test file never collide with those in another.
 """
 
 import os
@@ -17,21 +20,28 @@ from app.db.base import Base
 
 _database_url = os.environ.get("DATABASE_URL", "sqlite:///:memory:")
 
-if _database_url.startswith("sqlite"):
-    _test_engine = create_engine(
-        _database_url,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(bind=_test_engine)
-else:
-    _test_engine = create_engine(_database_url)
+
+def _make_engine():
+    if _database_url.startswith("sqlite"):
+        engine = create_engine(
+            _database_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        return engine
+    return create_engine(_database_url)
 
 
 @pytest.fixture
 def db_session() -> Generator[Session, None, None]:
-    """A session bound to a connection-level transaction that's rolled back."""
-    connection = _test_engine.connect()
+    """A session backed by its own fresh in-memory SQLite database.
+
+    Each invocation creates a new engine + schema so there is no state leakage
+    between test functions, even when tests use hardcoded primary-key IDs.
+    """
+    engine = _make_engine()
+    connection = engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection, join_transaction_mode="create_savepoint")
 
@@ -41,3 +51,4 @@ def db_session() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+        engine.dispose()
