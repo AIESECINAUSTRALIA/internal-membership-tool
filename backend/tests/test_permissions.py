@@ -86,8 +86,10 @@ def mcvp_context() -> MembershipContext:
 
 
 def test_resolve_widest_scope_for_tl(tl_context: MembershipContext) -> None:
-    scope = resolve_widest_scope([tl_context], "membership", "view")
-    assert scope == "team"
+    # A Team Leader sees their whole LC, but only adds and extends within their team.
+    assert resolve_widest_scope([tl_context], "membership", "view") == "lc"
+    assert resolve_widest_scope([tl_context], "membership", "create") == "team"
+    assert resolve_widest_scope([tl_context], "membership", "edit") == "team"
 
 
 def test_resolve_widest_scope_for_lcvp(lcvp_context: MembershipContext) -> None:
@@ -254,3 +256,30 @@ def test_can_view_membership_lc_scope(
     # A plain member has no membership:view grant at all
     assert can_view_membership([member_context], lcvp_context) is False
     assert can_view_membership([], member_context) is False
+
+
+def test_team_leader_can_view_whole_own_lc_but_not_others(
+    tl_context: MembershipContext, member_context: MembershipContext
+) -> None:
+    other_team_same_lc = MembershipContext(
+        membership_id=11,
+        person_id=110,
+        lc_id=tl_context.lc_id,
+        position_key="member",
+        position_rank=1,
+        function_id=99,
+        team_id=777,
+    )
+    other_lc = MembershipContext(
+        membership_id=12,
+        person_id=120,
+        lc_id=tl_context.lc_id + 1,
+        position_key="member",
+        position_rank=1,
+        function_id=5,
+        team_id=20,
+    )
+    assert can_view_membership([tl_context], other_team_same_lc) is True
+    assert can_view_membership([tl_context], other_lc) is False
+    # Viewing wider does not widen writes: extending still needs team scope.
+    assert can_extend_term([tl_context], other_team_same_lc) is False

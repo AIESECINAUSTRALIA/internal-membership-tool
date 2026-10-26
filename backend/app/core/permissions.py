@@ -62,10 +62,10 @@ BASELINE_PERMISSION_MATRIX: list[MatrixGrant] = [
     MatrixGrant("member", "member_record", "edit", "own"),
     MatrixGrant("member", "kpi_record", "view", "own"),
     MatrixGrant("member", "kpi_record", "create", "own"),
-    # Team Leader: team scope. Can view, add and extend within their team; no move.
+    # Team Leader: sees the whole LC; adds and extends within their team only; no move.
     MatrixGrant("team_leader", "member_record", "view", "own"),
     MatrixGrant("team_leader", "member_record", "edit", "own"),
-    MatrixGrant("team_leader", "membership", "view", "team"),
+    MatrixGrant("team_leader", "membership", "view", "lc"),
     MatrixGrant("team_leader", "membership", "create", "team"),
     MatrixGrant("team_leader", "membership", "edit", "team"),
     MatrixGrant("team_leader", "kpi_record", "view", "team"),

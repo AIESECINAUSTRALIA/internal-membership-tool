@@ -213,7 +213,11 @@ def list_members_summary(
             " ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else ""
         )
 
-        primary_lc = lcs.get(p_memberships[0].lc_id)
+        # A person with memberships in several LCs shows their most recent one: that
+        # LC, and the roles they hold in it (concurrent functions stay listed together).
+        latest = max(p_memberships, key=lambda m: (m.start_date, m.id))
+        p_memberships = [m for m in p_memberships if m.lc_id == latest.lc_id]
+        primary_lc = lcs.get(latest.lc_id)
         lc_payload = {
             "id": str(primary_lc.id) if primary_lc else "",
             "name": primary_lc.name if primary_lc else "",

@@ -644,3 +644,49 @@ def test_add_member_rejects_unknown_team(client_with_actor: Fixture) -> None:
         "status": "rejected",
         "message": "Choose a team in the same LC and function.",
     }
+
+
+# ---------------------------------------------------------------------------
+# Test: Team Leaders see their whole LC; multi-LC people show their latest LC
+# ---------------------------------------------------------------------------
+
+
+def test_team_leader_sees_whole_lc_in_list_and_detail(client_with_actor: Fixture) -> None:
+    client, actor_map, seed = client_with_actor
+    app.dependency_overrides[get_current_actor] = lambda: actor_map["tl"]
+
+    listed = client.post("/api/v1/members/summary", json={})
+    names = {item["lc"]["name"] for item in listed.json()["items"]}
+    assert names == {"test-usyd"}
+
+    # A member of another team in the same LC is viewable, another LC's is not.
+    assert client.get(f"/api/v1/members/{seed.m_member_usyd.id}").status_code == 200
+    assert client.get(f"/api/v1/members/{seed.m_member_mu.id}").status_code == 404
+
+
+def test_list_uses_most_recent_membership_for_lc_and_roles(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    mc = LC(name="test-mc", type=LCType.MC, active=True)
+    db_session.add(mc)
+    db_session.flush()
+    mc_person = _person(db_session, "MC Person", "test-mcvp@aiesec.net")
+    m_mc = _membership(db_session, mc_person, mc, seed.pos_mcvp, seed.fn_ogv, seed.term)
+    app.dependency_overrides[get_current_actor] = lambda: CurrentActor(
+        person=mc_person, active_memberships=[m_mc], acting_membership=m_mc
+    )
+
+    mover = _person(db_session, "Mover Person", "test-mover@aiesec.net")
+    older = _membership(db_session, mover, seed.lc_mu, seed.pos_member, seed.fn_ogv, seed.term)
+    older.start_date = date(2026, 1, 1)
+    newer = _membership(db_session, mover, seed.lc_usyd, seed.pos_tl, seed.fn_ogv, seed.term)
+    newer.start_date = date(2026, 6, 1)
+    db_session.flush()
+
+    resp = client.post("/api/v1/members/summary", json={"search": "Mover"})
+
+    (row,) = resp.json()["items"]
+    assert row["lc"]["name"] == "test-usyd"
+    assert [r["membershipId"] for r in row["roles"]] == [str(newer.id)]
+    assert row["roles"][0]["position"]["key"] == "team_leader"
