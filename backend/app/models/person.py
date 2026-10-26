@@ -34,6 +34,11 @@ class Person(Base):
     personal_email: Mapped[str | None] = mapped_column(String, nullable=True)
     phone: Mapped[str | None] = mapped_column(String, nullable=True)
     join_date: Mapped[date] = mapped_column(Date)
+    # IANA timezone from the state of the LC of the person's most recent
+    # membership (spec §4.1). Kept up to date by `refresh_person_timezone`.
+    timezone: Mapped[str] = mapped_column(
+        String, default="Australia/Melbourne", server_default="Australia/Melbourne"
+    )
     status: Mapped[PersonStatus] = mapped_column(
         Enum(
             PersonStatus, name="personstatus", native_enum=False, length=20, create_constraint=True

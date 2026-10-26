@@ -1,6 +1,7 @@
 import {
   Box,
   Button,
+  Chip,
   IconButton,
   Menu,
   MenuItem,
@@ -15,40 +16,38 @@ import {
 } from '@mui/material'
 import AddOutlined from '@mui/icons-material/AddOutlined'
 import MoreVert from '@mui/icons-material/MoreVert'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
+import { useApi } from '../../api/ApiContext'
 import { useReferenceData } from '../../api/ReferenceDataContext'
 import type { Lc } from '../../api/types'
-import { NotBuiltYetDialog } from '../../components/NotBuiltYetDialog'
+import { can } from '../../auth/permissions'
+import { useAuth } from '../../auth/authContext'
+import {
+  AddLcDialog,
+  MergeLcDialog,
+  RenameLcDialog,
+  SetLcActiveDialog,
+  SetLcStateDialog,
+} from '../LcDialogs'
 
-type LcAction = 'rename' | 'set_state' | 'mark_inactive' | 'merge'
+type LcAction = 'add' | 'rename' | 'set_state' | 'set_inactive' | 'set_active' | 'merge'
 
-const ACTION_COPY: Record<LcAction, { title: (lc: Lc) => string; body: string }> = {
-  rename: {
-    title: (lc) => `Rename ${lc.name}`,
-    body: 'This will change the LC name everywhere it is shown, without touching its history.',
-  },
-  set_state: {
-    title: (lc) => `Set state for ${lc.name}`,
-    body: 'This will set the LC’s state, which drives its timezone for date-scoped data.',
-  },
-  mark_inactive: {
-    title: (lc) => `Mark ${lc.name} inactive`,
-    body: 'This will stop the LC being offered when someone is added, without touching existing members or history.',
-  },
-  merge: {
-    title: (lc) => `Merge ${lc.name}`,
-    body: 'This will move another LC’s members and history into this one, then mark the other LC inactive.',
-  },
+/** The dialog that is open: an action, plus the LC it applies to (none for "add"). */
+interface OpenDialog {
+  action: LcAction
+  lc: Lc | null
 }
 
-/** The per-row "..." menu: every action from spec §1.5/§2A.2's LCs row. */
+/** The per-row "..." menu. Inactive LCs can only be reactivated or renamed. */
 function LcActionsMenu({ lc, onChoose }: { lc: Lc; onChoose: (action: LcAction) => void }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const choose = (action: LcAction) => {
     setAnchor(null)
     onChoose(action)
   }
+  const isMc = lc.type === 'mc'
+
   return (
     <>
       <IconButton aria-label={`Actions for ${lc.name}`} aria-haspopup="menu" onClick={(e) => setAnchor(e.currentTarget)}>
@@ -56,9 +55,10 @@ function LcActionsMenu({ lc, onChoose }: { lc: Lc; onChoose: (action: LcAction) 
       </IconButton>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem onClick={() => choose('rename')}>Rename</MenuItem>
-        <MenuItem onClick={() => choose('set_state')}>Set state</MenuItem>
-        <MenuItem onClick={() => choose('mark_inactive')}>Mark inactive</MenuItem>
-        <MenuItem onClick={() => choose('merge')}>Merge into another LC</MenuItem>
+        {!isMc && <MenuItem onClick={() => choose('set_state')}>Set state</MenuItem>}
+        {lc.active && !isMc && <MenuItem onClick={() => choose('merge')}>Merge into another LC</MenuItem>}
+        {lc.active && !isMc && <MenuItem onClick={() => choose('set_inactive')}>Mark inactive</MenuItem>}
+        {!lc.active && <MenuItem onClick={() => choose('set_active')}>Mark active</MenuItem>}
       </Menu>
     </>
   )
@@ -66,13 +66,33 @@ function LcActionsMenu({ lc, onChoose }: { lc: Lc; onChoose: (action: LcAction) 
 
 /**
  * The LCs screen (spec §1.5, §2A.2): add, rename, set state, mark inactive, merge.
- * Reads the real reference data, same as the rest of the app; the actions are stubs
- * until the backend exists, following the same pattern as Settings' Functions screen.
+ * There is no delete: marking an LC inactive is the soft delete, and it can be undone.
+ * Actions are only offered to people holding `manage` on `lc`; the server checks again.
  */
 export function AdminLcsPage() {
-  const { reference } = useReferenceData()
-  const lcs: Lc[] = reference?.lcs ?? []
-  const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null)
+  const api = useApi()
+  const { me } = useAuth()
+  const { invalidate: refreshReferenceData } = useReferenceData()
+  const [lcs, setLcs] = useState<Lc[]>([])
+  const [dialog, setDialog] = useState<OpenDialog | null>(null)
+  const canManage = me !== null && can(me.permissions, 'lc', 'manage')
+
+  const load = useCallback(() => {
+    api.listLcsAdmin().then(setLcs)
+  }, [api])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // Other screens read LCs from the shared reference data, so refresh that too.
+  const handleDone = () => {
+    load()
+    refreshReferenceData()
+  }
+
+  const mergeTargets = (source: Lc) => lcs.filter((lc) => lc.active && lc.type === 'lc' && lc.id !== source.id)
+  const closeDialog = () => setDialog(null)
 
   return (
     <Stack spacing={3}>
@@ -82,16 +102,14 @@ export function AdminLcsPage() {
             LCs
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, maxWidth: '65ch' }}>
-            Local Committees and the MC. Renaming or marking one inactive never breaks the history that points at it.
+            Local Committees and the MC. Renaming, merging or marking one inactive never breaks the history that points at it.
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<AddOutlined />}
-          onClick={() => setDialog({ title: 'Add LC', body: 'This will add a new LC, available to add members to.' })}
-        >
-          Add LC
-        </Button>
+        {canManage && (
+          <Button variant="contained" startIcon={<AddOutlined />} onClick={() => setDialog({ action: 'add', lc: null })}>
+            Add LC
+          </Button>
+        )}
       </Stack>
       <Paper variant="outlined" component="section" aria-labelledby="lcs-title" sx={{ p: 3 }}>
         <Box sx={{ overflowX: 'auto' }}>
@@ -100,7 +118,9 @@ export function AdminLcsPage() {
               <TableRow>
                 <TableCell>Name</TableCell>
                 <TableCell>Type</TableCell>
-                <TableCell aria-label="Actions" />
+                <TableCell>State</TableCell>
+                <TableCell>Status</TableCell>
+                {canManage && <TableCell aria-label="Actions" />}
               </TableRow>
             </TableHead>
             <TableBody>
@@ -108,19 +128,37 @@ export function AdminLcsPage() {
                 <TableRow key={lc.id}>
                   <TableCell>{lc.name}</TableCell>
                   <TableCell>{lc.type === 'mc' ? 'MC' : 'Local Committee'}</TableCell>
-                  <TableCell align="right">
-                    <LcActionsMenu lc={lc} onChoose={(action) => setDialog({ title: ACTION_COPY[action].title(lc), body: ACTION_COPY[action].body })} />
+                  <TableCell>{lc.state ?? '—'}</TableCell>
+                  <TableCell>
+                    <Chip size="small" variant="outlined" label={lc.active ? 'Active' : 'Inactive'} />
                   </TableCell>
+                  {canManage && (
+                    <TableCell align="right">
+                      <LcActionsMenu lc={lc} onChoose={(action) => setDialog({ action, lc })} />
+                    </TableCell>
+                  )}
                 </TableRow>
               ))}
             </TableBody>
           </Table>
         </Box>
       </Paper>
-      {dialog && (
-        <NotBuiltYetDialog open title={dialog.title} onClose={() => setDialog(null)}>
-          {dialog.body}
-        </NotBuiltYetDialog>
+
+      {dialog?.action === 'add' && <AddLcDialog onClose={closeDialog} onDone={handleDone} />}
+      {dialog?.lc && dialog.action === 'rename' && (
+        <RenameLcDialog lc={dialog.lc} onClose={closeDialog} onDone={handleDone} />
+      )}
+      {dialog?.lc && dialog.action === 'set_state' && (
+        <SetLcStateDialog lc={dialog.lc} onClose={closeDialog} onDone={handleDone} />
+      )}
+      {dialog?.lc && dialog.action === 'set_inactive' && (
+        <SetLcActiveDialog lc={dialog.lc} makeActive={false} onClose={closeDialog} onDone={handleDone} />
+      )}
+      {dialog?.lc && dialog.action === 'set_active' && (
+        <SetLcActiveDialog lc={dialog.lc} makeActive onClose={closeDialog} onDone={handleDone} />
+      )}
+      {dialog?.lc && dialog.action === 'merge' && (
+        <MergeLcDialog lc={dialog.lc} targets={mergeTargets(dialog.lc)} onClose={closeDialog} onDone={handleDone} />
       )}
     </Stack>
   )

@@ -34,8 +34,15 @@ class LCResponse(BaseModel):
 
 
 class MergeResult(BaseModel):
+    """What a merge changed. KPI records are not moved: they stay with the
+    membership they were logged against, so they keep counting towards the
+    source LC."""
+
     memberships_moved: int
-    teams_moved: int
+    future_memberships_repointed: int
+    teams_created: int
+    teams_reused: int
+    leaders_not_carried: int
 
 
 class StateTimezoneResponse(BaseModel):

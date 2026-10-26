@@ -133,7 +133,7 @@ def make_team(
     return team
 
 
-def make_person_and_recorder(session: Session) -> tuple:
+def make_person_and_recorder(session: Session) -> tuple[Person, int]:
     """A person plus a membership id to use as recorded_by in attribute tests."""
     lc = make_lc(session)
     position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)
