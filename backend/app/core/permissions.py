@@ -30,6 +30,10 @@ POSITION_RANKS: dict[str, int] = {
 }
 
 MC_POSITIONS: set[str] = {"mcd", "mcvp", "mcp"}
+# Admin positions (spec §1.4 "Data / Privacy admin") are position-linked, not
+# named people. The position itself is not seeded yet (spec §12 #12), so nobody
+# holds this key today; the grants below take effect once it is created.
+ADMIN_POSITIONS: set[str] = {"admin"}
 PRESIDENTIAL_POSITIONS: set[str] = {"lcp", "mcp"}
 TEAM_HOLDING_POSITIONS: set[str] = {"member", "team_leader"}
 
@@ -115,6 +119,12 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
             MatrixGrant(_mc_pos, "function", "manage", "all"),
         ]
     )
+
+
+# LC management (spec §1.5, §2A.2) is org-wide configuration, so MC and admin
+# positions hold it at the widest scope.
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
 
 
 @dataclass(frozen=True)
@@ -236,6 +246,15 @@ def can_act_on_target(
 
     # Check 2: Rank hierarchy (strictly below)
     return target.position_rank < acting.position_rank
+
+
+def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, set state, deactivate or merge LCs (spec §1.5).
+
+    Needs `manage` on `lc` at scope `all`. There is no target person, so the
+    hierarchy and self-action checks from `can_act_on_target` do not apply.
+    """
+    return resolve_widest_scope(actor_memberships, "lc", "manage") == "all"
 
 
 def can_view_membership(

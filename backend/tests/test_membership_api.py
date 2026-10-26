@@ -30,6 +30,7 @@ from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
+from tests.helpers import make_state_timezone
 
 # ---------------------------------------------------------------------------
 # Test Fixtures
@@ -494,6 +495,48 @@ def test_add_member_allowed_new_person(client_with_actor: Fixture, db_session: S
     ).scalar_one_or_none()
     assert created is not None
     assert _create_audit_count(db_session) == 1
+
+
+def test_add_member_sets_timezone_from_lc_state(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    make_state_timezone(db_session, state="WA", timezone="Australia/Perth")
+    seed.lc_usyd.state = "WA"
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json()["status"] == "created"
+    created = db_session.execute(
+        select(Person).where(Person.aiesec_email == "test-new-person@aiesec.net")
+    ).scalar_one()
+    assert created.timezone == "Australia/Perth"
+
+
+def test_add_member_defaults_timezone_when_lc_has_no_state(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json()["status"] == "created"
+    created = db_session.execute(
+        select(Person).where(Person.aiesec_email == "test-new-person@aiesec.net")
+    ).scalar_one()
+    assert created.timezone == "Australia/Melbourne"
+
+
+def test_add_member_rejects_inactive_lc(client_with_actor: Fixture, db_session: Session) -> None:
+    client, _, seed = client_with_actor
+    seed.lc_usyd.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That LC is inactive."}
+    assert _create_audit_count(db_session) == 0
 
 
 # ---------------------------------------------------------------------------

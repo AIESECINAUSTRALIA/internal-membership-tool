@@ -31,6 +31,7 @@ from app.core.permissions import (
 from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, Position, Term
 from app.models.person import Person, PersonStatus
+from app.repositories.lc import refresh_person_timezone
 
 
 def get_active_memberships_for_person(
@@ -330,6 +331,8 @@ def add_member(
     lc = session.get(LC, lc_id)
     if not lc:
         return {"status": "rejected", "message": "LC not found."}
+    if not lc.active:
+        return {"status": "rejected", "message": "That LC is inactive."}
 
     pos = session.execute(select(Position).where(Position.key == position_key)).scalar_one_or_none()
     if not pos:
@@ -499,6 +502,9 @@ def add_member(
         **_audit_actor(actor_memberships),
         diff={"after": {"lc_id": lc.id, "position_id": pos.id, "start_date": str(start_date)}},
     )
+
+    # Timezone follows the person's most recent membership (spec §4.1).
+    refresh_person_timezone(session, person_id=person.id, as_of=start_date)
 
     return {"status": "created"}
 

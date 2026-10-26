@@ -63,6 +63,10 @@ export interface Lc {
   /** Short display name, e.g. "USYD". The MC is a row with type 'mc' (spec §0.5). */
   name: string
   type: Level
+  /** Australian state or territory, e.g. "NSW". Drives members' timezone (§4.1). The MC has none. */
+  state: string | null
+  /** Inactive LCs keep their history but are not offered when adding members (§1.5). */
+  active: boolean
 }
 
 export interface Term {
@@ -229,6 +233,38 @@ export type AddMemberResult =
 
 export type ActionResult = { status: 'ok' } | { status: 'rejected'; message: string }
 
+/** One row of the state → timezone lookup (§4.1). */
+export interface StateTimezone {
+  state: string
+  timezone: string
+}
+
+export interface CreateLcInput {
+  name: string
+  state: string | null
+}
+
+/** Only the fields present are changed. There is no delete: "inactive" is the soft delete. */
+export interface UpdateLcInput {
+  name?: string
+  state?: string
+  active?: boolean
+}
+
+/** What a merge changed. KPI records are not moved: they stay with the membership they
+ * were logged against, so they keep counting towards the source LC. */
+export interface MergeLcSummary {
+  membershipsMoved: number
+  futureMembershipsRepointed: number
+  teamsCreated: number
+  teamsReused: number
+  leadersNotCarried: number
+}
+
+export type MergeLcResult =
+  | { status: 'ok'; summary: MergeLcSummary }
+  | { status: 'rejected'; message: string }
+
 /** What the Manage membership panel shows about one membership (team + term). */
 export interface MembershipDetail {
   membershipId: string
@@ -307,6 +343,15 @@ export interface Api {
   // Homepage
   getHomeChart(): Promise<HomeChart>
 
-  // Admin console: People (§2A.2, §1.5). LCs read `getReferenceData()` above.
+  // Admin console: LCs (§2A.2, §1.5). Each change needs `manage` on `lc`.
+  /** Every LC including inactive ones; `getReferenceData()` lists active LCs only. */
+  listLcsAdmin(): Promise<Lc[]>
+  listStateTimezones(): Promise<StateTimezone[]>
+  createLc(input: CreateLcInput): Promise<ActionResult>
+  updateLc(lcId: string, changes: UpdateLcInput): Promise<ActionResult>
+  /** Merge `sourceId` into `targetId` as of today. History is kept: see MergeLcSummary. */
+  mergeLc(sourceId: string, targetId: string): Promise<MergeLcResult>
+
+  // Admin console: People (§2A.2, §1.5).
   listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>>
 }

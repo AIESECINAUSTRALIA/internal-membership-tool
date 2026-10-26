@@ -9,8 +9,8 @@ from datetime import date, timedelta
 from sqlalchemy.orm import Session
 
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
-from app.models.membership import Membership
-from app.models.org import LC, Function, LCType, Position, Term
+from app.models.membership import Membership, Team
+from app.models.org import LC, Function, LCType, Position, StateTimezone, Term
 from app.models.person import Person
 
 TODAY = date(2026, 6, 15)
@@ -18,11 +18,30 @@ YEAR_AGO = TODAY - timedelta(days=365)
 YEAR_AHEAD = TODAY + timedelta(days=365)
 
 
-def make_lc(session: Session, *, name: str = "AIESEC in Testville") -> LC:
-    lc = LC(name=name, type=LCType.LC, active=True)
+def make_lc(
+    session: Session,
+    *,
+    name: str = "AIESEC in Testville",
+    lc_type: LCType = LCType.LC,
+    state: str | None = None,
+) -> LC:
+    lc = LC(name=name, type=lc_type, state=state, active=True)
     session.add(lc)
     session.flush()
     return lc
+
+
+def make_state_timezone(
+    session: Session,
+    *,
+    state: str = "NSW",
+    timezone: str = "Australia/Sydney",
+) -> StateTimezone:
+    # Use merge() so this works whether or not the seed migration already
+    # inserted this state row (merge upserts by PK, avoiding UniqueViolation).
+    st = session.merge(StateTimezone(state=state, timezone=timezone))
+    session.flush()
+    return st
 
 
 def make_position(
@@ -100,7 +119,21 @@ def make_membership(
     return membership
 
 
-def make_person_and_recorder(session: Session) -> tuple:
+def make_team(
+    session: Session,
+    *,
+    lc: LC,
+    function: Function,
+    term: Term,
+    name: str = "Test Team",
+) -> Team:
+    team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name=name)
+    session.add(team)
+    session.flush()
+    return team
+
+
+def make_person_and_recorder(session: Session) -> tuple[Person, int]:
     """A person plus a membership id to use as recorded_by in attribute tests."""
     lc = make_lc(session)
     position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)

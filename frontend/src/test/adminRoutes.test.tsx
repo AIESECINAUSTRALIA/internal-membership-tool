@@ -2,7 +2,7 @@
  * The Admin console (spec §2A.2): its own guard tree, own sign-in, own screens.
  * Rendered for real with the mock API, same approach as `routes.test.tsx`.
  */
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it } from 'vitest'
 
@@ -75,24 +75,100 @@ describe('admin console guards', () => {
 })
 
 describe('admin console screens', () => {
-  it('shows the LCs table with real reference data, and an Add LC action that is not built yet', async () => {
+  it('shows the LCs table with state and status, and an Add LC action', async () => {
     await renderApp('mcvp', '/admin/lcs', true)
     const table = await screen.findByRole('table', { name: 'LCs' })
-    expect(within(table).getByText('USYD')).toBeInTheDocument()
+    expect(await within(table).findByText('USYD')).toBeInTheDocument()
     // The MC row's name ("MC") and its type column ("MC") both render "MC".
     expect(within(table).getAllByText('MC')).toHaveLength(2)
-
-    fireEvent.click(screen.getByRole('button', { name: 'Add LC' }))
-    expect(await screen.findByRole('heading', { name: 'Add LC' })).toBeInTheDocument()
-    expect(screen.getByText(/Not built yet\./)).toBeInTheDocument()
+    expect(within(table).getAllByText('NSW').length).toBeGreaterThan(0)
+    expect(within(table).getAllByText('Active').length).toBeGreaterThan(0)
+    expect(screen.getByRole('button', { name: 'Add LC' })).toBeInTheDocument()
   })
 
-  it('lets an admin rename an LC through the stub action', async () => {
+  it('adds an LC with a state', async () => {
+    await renderApp('mcvp', '/admin/lcs', true)
+    await screen.findByRole('table', { name: 'LCs' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add LC' }))
+    const dialog = await screen.findByRole('dialog', { name: 'Add LC' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Name/ }), { target: { value: 'UWA' } })
+    fireEvent.mouseDown(within(dialog).getByRole('combobox', { name: /State/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /WA \(Australia\/Perth\)/ }))
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add LC' }))
+
+    const table = await screen.findByRole('table', { name: 'LCs' })
+    expect(await within(table).findByText('UWA')).toBeInTheDocument()
+    expect(within(table).getByText('WA')).toBeInTheDocument()
+  })
+
+  it('renames an LC', async () => {
     await renderApp('mcvp', '/admin/lcs', true)
     const table = await screen.findByRole('table', { name: 'LCs' })
-    fireEvent.click(within(table).getByRole('button', { name: 'Actions for USYD' }))
+    fireEvent.click(await within(table).findByRole('button', { name: 'Actions for USYD' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
-    expect(await screen.findByRole('heading', { name: 'Rename USYD' })).toBeInTheDocument()
+
+    const dialog = await screen.findByRole('dialog', { name: 'Rename USYD' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Name/ }), { target: { value: 'University of Sydney' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename' }))
+
+    expect(await within(await screen.findByRole('table', { name: 'LCs' })).findByText('University of Sydney')).toBeInTheDocument()
+  })
+
+  it('shows the server message when a rename clashes with an existing LC', async () => {
+    await renderApp('mcvp', '/admin/lcs', true)
+    const table = await screen.findByRole('table', { name: 'LCs' })
+    fireEvent.click(await within(table).findByRole('button', { name: 'Actions for USYD' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Rename USYD' })
+    fireEvent.change(within(dialog).getByRole('textbox', { name: /Name/ }), { target: { value: 'mu' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rename' }))
+
+    expect(await within(dialog).findByText('An LC with that name already exists.')).toBeInTheDocument()
+  })
+
+  it('marks an LC inactive and then active again, with no delete option', async () => {
+    await renderApp('mcvp', '/admin/lcs', true)
+    const table = await screen.findByRole('table', { name: 'LCs' })
+    fireEvent.click(await within(table).findByRole('button', { name: 'Actions for UNSW' }))
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark inactive' }))
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Mark UNSW inactive' })).getByRole('button', { name: 'Mark inactive' }))
+
+    const unswRow = async () => (await within(await screen.findByRole('table', { name: 'LCs' })).findByText('UNSW')).closest('tr')!
+    await waitFor(async () => expect(within(await unswRow()).getByText('Inactive')).toBeInTheDocument())
+
+    fireEvent.click(within(await unswRow()).getByRole('button', { name: 'Actions for UNSW' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Mark active' }))
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'Mark UNSW active' })).getByRole('button', { name: 'Mark active' }))
+    await waitFor(async () => expect(within(await unswRow()).getByText('Active')).toBeInTheDocument())
+  })
+
+  it('merges an LC into another, reports the result, and marks the source inactive', async () => {
+    await renderApp('mcvp', '/admin/lcs', true)
+    const table = await screen.findByRole('table', { name: 'LCs' })
+    fireEvent.click(await within(table).findByRole('button', { name: 'Actions for MU' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Merge into another LC' }))
+
+    const dialog = await screen.findByRole('dialog', { name: 'Merge MU' })
+    fireEvent.mouseDown(within(dialog).getByRole('combobox', { name: /Merge into/ }))
+    fireEvent.click(await screen.findByRole('option', { name: 'USYD' }))
+    expect(within(dialog).getByText(/Their past records and KPIs stay under MU/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Merge' }))
+
+    expect(await screen.findByRole('dialog', { name: 'Merge complete' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    const muRow = (await within(await screen.findByRole('table', { name: 'LCs' })).findByText('MU')).closest('tr')!
+    await waitFor(() => expect(within(muRow).getByText('Inactive')).toBeInTheDocument())
+  })
+
+  it('does not offer the MC as something to merge or deactivate', async () => {
+    await renderApp('mcvp', '/admin/lcs', true)
+    const table = await screen.findByRole('table', { name: 'LCs' })
+    fireEvent.click(await within(table).findByRole('button', { name: 'Actions for MC' }))
+    expect(screen.queryByRole('menuitem', { name: 'Merge into another LC' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Mark inactive' })).not.toBeInTheDocument()
   })
 
   it('shows the People table, searchable, with email and status', async () => {
