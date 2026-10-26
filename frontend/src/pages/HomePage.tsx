@@ -10,7 +10,7 @@ import { EmptyChartState } from '../components/EmptyState'
  * A homepage block: self-contained so a later version can let people arrange or swap
  * blocks (customisation is V2, spec §2A.4). Build no customisation now.
  */
-function ChartBlock({ chart }: { chart: HomeChart | null }) {
+function ChartBlock({ chart, failed }: { chart: HomeChart | null; failed: boolean }) {
   return (
     <Paper variant="outlined" sx={{ p: 3 }} component="section" aria-labelledby="home-chart-title">
       <Typography id="home-chart-title" variant="h2" component="h2">
@@ -22,7 +22,7 @@ function ChartBlock({ chart }: { chart: HomeChart | null }) {
         {chart?.scope === 'all' && 'All LCs, month by month.'}
       </Typography>
       {/* No KPI catalog yet (spec §4.3 TODO), so there are no points to plot. */}
-      {chart && chart.points.length === 0 && <EmptyChartState />}
+      {((chart && chart.points.length === 0) || failed) && <EmptyChartState />}
     </Paper>
   )
 }
@@ -36,12 +36,20 @@ export function HomePage() {
   const api = useApi()
   const { me } = useAuth()
   const [chart, setChart] = useState<HomeChart | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
-    api.getHomeChart().then((result) => {
-      if (!cancelled) setChart(result)
-    })
+    api.getHomeChart().then(
+      (result) => {
+        if (!cancelled) setChart(result)
+      },
+      // No chart data for this person (e.g. real Google sign-in while chart data is still
+      // mock-only): show the empty state instead of loading forever.
+      () => {
+        if (!cancelled) setFailed(true)
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -53,7 +61,7 @@ export function HomePage() {
         Home
       </Typography>
       <Typography>Welcome back, {me?.person.firstName}.</Typography>
-      <ChartBlock chart={chart} />
+      <ChartBlock chart={chart} failed={failed} />
     </Stack>
   )
 }
