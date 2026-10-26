@@ -115,9 +115,9 @@ describe('navigation gating', () => {
   it.each<[PersonaKey, string[]]>([
     ['member', ['home', 'tracking', 'settings']], // no Membership, no Data
     ['tl', ['home', 'membership', 'tracking', 'data', 'settings']],
-    ['lcvp', ['home', 'membership', 'tracking', 'data', 'settings']],
-    ['lcp', ['home', 'membership', 'tracking', 'data', 'settings']],
-    ['mcvp', ['home', 'membership', 'tracking', 'data', 'settings']],
+    ['lcvp', ['home', 'membership', 'tracking', 'data', 'odm', 'settings']],
+    ['lcp', ['home', 'membership', 'tracking', 'data', 'odm', 'settings']],
+    ['mcvp', ['home', 'membership', 'tracking', 'data', 'odm', 'settings']],
   ])('%s sees the right pages once they are all built', async (persona, expected) => {
     const { me } = await signInAs(persona)
     expect(keys(me, true)).toEqual(expected)
@@ -129,9 +129,9 @@ describe('navigation gating', () => {
     expect(visibleNavItems(items, [{ resource: 'x', action: 'view', scope: 'team' }]).map((i) => i.key)).toEqual(['a'])
   })
 
-  it('shows every page a person may open, now that all five exist', async () => {
+  it('shows every page a person may open, now that all six exist', async () => {
     expect(keys((await signInAs('member')).me, false)).toEqual(['home', 'tracking', 'settings'])
-    expect(keys((await signInAs('lcvp')).me, false)).toEqual(['home', 'membership', 'tracking', 'data', 'settings'])
+    expect(keys((await signInAs('lcvp')).me, false)).toEqual(['home', 'membership', 'tracking', 'data', 'odm', 'settings'])
   })
 
   it('hides an item whose page is not built yet, unless asked to include it', () => {

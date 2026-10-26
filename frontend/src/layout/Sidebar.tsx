@@ -4,6 +4,7 @@ import GroupsOutlined from '@mui/icons-material/GroupsOutlined'
 import PlaylistAddCheckOutlined from '@mui/icons-material/PlaylistAddCheckOutlined'
 import InsightsOutlined from '@mui/icons-material/InsightsOutlined'
 import SettingsOutlined from '@mui/icons-material/SettingsOutlined'
+import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
 import type { ReactElement } from 'react'
 import { Link as RouterLink, useLocation } from 'react-router-dom'
 
@@ -21,6 +22,7 @@ const ICONS: Record<NavItem['key'], ReactElement> = {
   tracking: <PlaylistAddCheckOutlined />,
   data: <InsightsOutlined />,
   settings: <SettingsOutlined />,
+  odm: <AccountTreeOutlined />,
 }
 
 function isCurrent(item: NavItem, pathname: string): boolean {
