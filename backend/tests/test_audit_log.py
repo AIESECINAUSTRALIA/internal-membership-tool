@@ -61,6 +61,8 @@ def test_record_audit_accepts_a_sign_in_with_only_a_person(db_session: Session) 
 
 
 def test_update_is_rejected_by_the_database(db_session: Session) -> None:
+    if db_session.bind.dialect.name != "postgresql":
+        pytest.skip("Tamper tests test PostgreSQL triggers and require a PostgreSQL database")
     entry = _write_entry(db_session)
 
     with pytest.raises(DBAPIError, match="append-only"):
@@ -70,6 +72,8 @@ def test_update_is_rejected_by_the_database(db_session: Session) -> None:
 
 
 def test_delete_is_rejected_by_the_database(db_session: Session) -> None:
+    if db_session.bind.dialect.name != "postgresql":
+        pytest.skip("Tamper tests test PostgreSQL triggers and require a PostgreSQL database")
     entry = _write_entry(db_session)
 
     with pytest.raises(DBAPIError, match="append-only"):
@@ -77,6 +81,8 @@ def test_delete_is_rejected_by_the_database(db_session: Session) -> None:
 
 
 def test_delete_is_rejected_even_in_replica_mode(db_session: Session) -> None:
+    if db_session.bind.dialect.name != "postgresql":
+        pytest.skip("Tamper tests test PostgreSQL triggers and require a PostgreSQL database")
     # `session_replication_role = replica` normally switches triggers off for
     # the session — a bypass needing no schema change. The triggers are
     # created `ENABLE ALWAYS`, so they still fire. (Setting the role needs a
@@ -89,6 +95,8 @@ def test_delete_is_rejected_even_in_replica_mode(db_session: Session) -> None:
 
 
 def test_truncate_is_rejected_by_the_database(db_session: Session) -> None:
+    if db_session.bind.dialect.name != "postgresql":
+        pytest.skip("Tamper tests test PostgreSQL triggers and require a PostgreSQL database")
     # Row-level triggers don't fire on TRUNCATE, so this needs its own guard.
     _write_entry(db_session)
 

@@ -1,24 +1,63 @@
 """Shared pytest fixtures.
 
-Tests run against the real, already-migrated database pointed to by
-`DATABASE_URL` (see `docs/local-development.md` and the CI workflow) rather
-than a mocked or in-memory one, so they catch anything a mock would hide —
-constraint violations, FK behaviour, enum/check constraints.
+Supports PostgreSQL via `DATABASE_URL` as well as an in-memory SQLite fallback
+for running unit and API tests in environments without a live PostgreSQL service.
+
+Each test gets its own fresh in-memory SQLite database (via a per-invocation
+engine) so hardcoded IDs in one test file never collide with those in another.
 """
 
+import os
 from collections.abc import Generator
 
 import pytest
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
 
-from app.db.session import engine
+import app.models  # noqa: F401
+from app.db.base import Base
+from app.models.org import StateTimezone
+
+_database_url = os.environ.get("DATABASE_URL", "sqlite:///:memory:")
+
+_STATE_TIMEZONES = [
+    ("NSW", "Australia/Sydney"),
+    ("VIC", "Australia/Melbourne"),
+    ("QLD", "Australia/Brisbane"),
+    ("SA", "Australia/Adelaide"),
+    ("WA", "Australia/Perth"),
+    ("TAS", "Australia/Hobart"),
+    ("ACT", "Australia/Sydney"),
+    ("NT", "Australia/Darwin"),
+]
+
+
+def _make_engine():
+    if _database_url.startswith("sqlite"):
+        engine = create_engine(
+            _database_url,
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(bind=engine)
+        with Session(bind=engine) as session:
+            for s, tz in _STATE_TIMEZONES:
+                if not session.get(StateTimezone, s):
+                    session.add(StateTimezone(state=s, timezone=tz))
+            session.commit()
+        return engine
+    return create_engine(_database_url)
 
 
 @pytest.fixture
 def db_session() -> Generator[Session, None, None]:
-    """A session bound to a connection-level transaction that's always rolled
-    back, so a test can `add`/`flush` freely without leaving data behind or
-    depending on any other test."""
+    """A session backed by its own fresh in-memory SQLite database (or live Postgres).
+
+    Each invocation creates a new engine + schema so there is no state leakage
+    between test functions, even when tests use hardcoded primary-key IDs.
+    """
+    engine = _make_engine()
     connection = engine.connect()
     transaction = connection.begin()
     session = Session(bind=connection, join_transaction_mode="create_savepoint")
@@ -29,3 +68,4 @@ def db_session() -> Generator[Session, None, None]:
         session.close()
         transaction.rollback()
         connection.close()
+        engine.dispose()
