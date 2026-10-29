@@ -5,8 +5,9 @@
  *   listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam
  *
  * All other methods (getMe, signIn, signOut, updateMyCustomFields,
- * getReferenceData, getHomeChart) are delegated to the mockApi so the rest of
- * the app keeps running while those tickets are still in progress.
+ * getReferenceData, getHomeChart, and Admin console methods) are delegated
+ * to the mockApi so the rest of the app keeps running while those tickets
+ * are still in progress.
  *
  * AUTH: The backend currently uses the `X-Actor-Email` test-double header (set
  * by `deps.py::get_current_actor`). Ticket 7 will replace this with a real JWT
@@ -115,30 +116,15 @@ async function get<T>(path: string, actorEmail: string | null): Promise<T> {
 /**
  * Creates an `Api` implementation that:
  * - Calls the real FastAPI backend for all five membership-summary methods.
- * - Delegates everything else to the mock (getMe, signIn, signOut, …).
+ * - Delegates everything else to the mock (getMe, signIn, signOut, admin, …).
  */
 export function createHttpApi(options: HttpApiOptions): Api {
   const mock = createMockApi(options.mockOptions ?? {})
   const email = () => options.getActorEmail()
 
   return {
-    // -------------------------------------------------------------------
-    // Session — still mock (Ticket 7 / §2A.3)
-    // -------------------------------------------------------------------
-    getMe: () => mock.getMe(),
-    signIn: () => mock.signIn(),
-    signOut: () => mock.signOut(),
-    updateMyCustomFields: (values) => mock.updateMyCustomFields(values),
-
-    // -------------------------------------------------------------------
-    // Reference data — still mock (no /reference-data endpoint yet)
-    // -------------------------------------------------------------------
-    getReferenceData: () => mock.getReferenceData(),
-
-    // -------------------------------------------------------------------
-    // Homepage chart — still mock (Ticket 11 / §2A.4)
-    // -------------------------------------------------------------------
-    getHomeChart: () => mock.getHomeChart(),
+    // Non-membership methods default to mockApi
+    ...mock,
 
     // -------------------------------------------------------------------
     // Membership summary — REAL backend (Spec §2A.5)
