@@ -7,7 +7,7 @@
  *
  * What these tests cover:
  *   - Each of the five membership-summary methods sends the right request.
- *   - Backend `{items, total}` is normalised to frontend `{rows, total}`.
+ *   - Backend returns `{rows, total}` matching frontend Page type.
  *   - String→integer coercions for lcId, teamId, termId, membershipId.
  *   - The `X-Actor-Email` header is included when the actor email is set.
  *   - All four `AddMemberResult` statuses are returned correctly.
@@ -73,7 +73,7 @@ afterEach(() => {
 
 describe('listMembers', () => {
   it('POSTs to /api/v1/members/summary with the right body', async () => {
-    const backendPage = { items: [], total: 0, page: 0, pageSize: 15 }
+    const backendPage = { rows: [], total: 0 }
     fetchSpy.mockReturnValueOnce(okResponse(backendPage))
 
     await makeApi().listMembers(ALL)
@@ -91,20 +91,20 @@ describe('listMembers', () => {
   })
 
   it('sends the actor email as X-Actor-Email', async () => {
-    fetchSpy.mockReturnValueOnce(okResponse({ items: [], total: 0, page: 0, pageSize: 15 }))
+    fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
     await makeApi(ACTOR_EMAIL).listMembers(ALL)
     const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>
     expect(headers['X-Actor-Email']).toBe(ACTOR_EMAIL)
   })
 
   it('omits X-Actor-Email when actor email is null', async () => {
-    fetchSpy.mockReturnValueOnce(okResponse({ items: [], total: 0, page: 0, pageSize: 15 }))
+    fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
     await makeApi(null).listMembers(ALL)
     const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>
     expect(headers['X-Actor-Email']).toBeUndefined()
   })
 
-  it('normalises backend {items} to frontend {rows}', async () => {
+  it('returns backend rows and total', async () => {
     const row = {
       personId: 'p-1',
       firstName: 'Ada',
@@ -112,22 +112,21 @@ describe('listMembers', () => {
       lc: { id: 'lc-1', name: 'USYD', type: 'lc' },
       roles: [],
     }
-    fetchSpy.mockReturnValueOnce(okResponse({ items: [row], total: 1, page: 0, pageSize: 15 }))
+    fetchSpy.mockReturnValueOnce(okResponse({ rows: [row], total: 1 }))
     const result = await makeApi().listMembers(ALL)
     expect(result.rows).toHaveLength(1)
     expect(result.rows[0].firstName).toBe('Ada')
     expect(result.total).toBe(1)
   })
 
-  it('passes sort field and direction when provided', async () => {
-    fetchSpy.mockReturnValueOnce(okResponse({ items: [], total: 0, page: 0, pageSize: 15 }))
+  it('passes sort object when provided', async () => {
+    fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
     await makeApi().listMembers({
       ...ALL,
       sort: { field: 'firstName', direction: 'desc' },
     })
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
-    expect(body.sortField).toBe('firstName')
-    expect(body.sortDirection).toBe('desc')
+    expect(body.sort).toEqual({ field: 'firstName', direction: 'desc' })
   })
 
   it('throws when the server returns an error status', async () => {
@@ -266,7 +265,6 @@ describe('moveToTeam', () => {
     await makeApi().moveToTeam('7', '99')
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect(url).toBe(`${BASE}/api/v1/members/7/move-to-team`)
-    // teamId must be an integer on the wire (backend schema is int)
     expect(JSON.parse(init.body as string)).toEqual({ teamId: 99 })
   })
 
@@ -291,9 +289,8 @@ describe('moveToTeam', () => {
 describe('delegated methods', () => {
   it('signIn / getMe / signOut still work via the mock', async () => {
     const api = makeApi()
-    // No fetch calls — these go to the mock
     const meBefore = await api.getMe()
-    expect(meBefore).toBeNull() // not signed in yet
+    expect(meBefore).toBeNull()
     await api.signIn()
     const meAfter = await api.getMe()
     expect(meAfter).not.toBeNull()

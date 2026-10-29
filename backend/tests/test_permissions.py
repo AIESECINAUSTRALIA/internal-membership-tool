@@ -3,10 +3,14 @@
 import pytest
 
 from app.core.permissions import (
+    POSITION_RANKS,
     MembershipContext,
     can_add_member,
     can_extend_term,
+    can_manage_lc,
     can_move_to_team,
+    can_view_membership,
+    position_level,
     resolve_widest_scope,
 )
 
@@ -84,8 +88,10 @@ def mcvp_context() -> MembershipContext:
 
 
 def test_resolve_widest_scope_for_tl(tl_context: MembershipContext) -> None:
-    scope = resolve_widest_scope([tl_context], "membership", "view")
-    assert scope == "team"
+    # A Team Leader sees their whole LC, but only adds and extends within their team.
+    assert resolve_widest_scope([tl_context], "membership", "view") == "lc"
+    assert resolve_widest_scope([tl_context], "membership", "create") == "team"
+    assert resolve_widest_scope([tl_context], "membership", "edit") == "team"
 
 
 def test_resolve_widest_scope_for_lcvp(lcvp_context: MembershipContext) -> None:
@@ -229,3 +235,82 @@ def test_level_mismatch_denied(lcp_context: MembershipContext) -> None:
     assert allowed is False
     assert msg is not None
     assert "level" in msg.lower()
+
+
+def test_position_level_mc_keys() -> None:
+    assert position_level("mcvp") == "mc"
+    assert position_level("lcvp") == "lc"
+
+
+def test_can_view_membership_lc_scope(
+    lcvp_context: MembershipContext, member_context: MembershipContext
+) -> None:
+    other_lc = MembershipContext(
+        membership_id=9,
+        person_id=90,
+        lc_id=101,
+        position_key="member",
+        position_rank=1,
+        function_id=5,
+    )
+    assert can_view_membership([lcvp_context], member_context) is True
+    assert can_view_membership([lcvp_context], other_lc) is False
+    # A plain member has no membership:view grant at all
+    assert can_view_membership([member_context], lcvp_context) is False
+    assert can_view_membership([], member_context) is False
+
+
+def test_team_leader_can_view_whole_own_lc_but_not_others(
+    tl_context: MembershipContext, member_context: MembershipContext
+) -> None:
+    other_team_same_lc = MembershipContext(
+        membership_id=11,
+        person_id=110,
+        lc_id=tl_context.lc_id,
+        position_key="member",
+        position_rank=1,
+        function_id=99,
+        team_id=777,
+    )
+    other_lc = MembershipContext(
+        membership_id=12,
+        person_id=120,
+        lc_id=tl_context.lc_id + 1,
+        position_key="member",
+        position_rank=1,
+        function_id=5,
+        team_id=20,
+    )
+    assert can_view_membership([tl_context], other_team_same_lc) is True
+    assert can_view_membership([tl_context], other_lc) is False
+    # Viewing wider does not widen writes: extending still needs team scope.
+    assert can_extend_term([tl_context], other_team_same_lc) is False
+
+
+# ---------------------------------------------------------------------------
+# LC management (spec §1.5): `manage` on `lc`, MC and admin positions only
+# ---------------------------------------------------------------------------
+
+
+def _context_for(position_key: str) -> MembershipContext:
+    return MembershipContext(
+        membership_id=1,
+        person_id=1,
+        lc_id=1,
+        position_key=position_key,
+        position_rank=POSITION_RANKS.get(position_key, 1),
+    )
+
+
+@pytest.mark.parametrize("position_key", ["mcd", "mcvp", "mcp", "admin"])
+def test_mc_and_admin_positions_can_manage_lcs(position_key: str) -> None:
+    assert can_manage_lc([_context_for(position_key)]) is True
+
+
+@pytest.mark.parametrize("position_key", ["member", "team_leader", "lcvp", "lcp"])
+def test_lc_level_positions_cannot_manage_lcs(position_key: str) -> None:
+    assert can_manage_lc([_context_for(position_key)]) is False
+
+
+def test_actor_without_memberships_cannot_manage_lcs() -> None:
+    assert can_manage_lc([]) is False

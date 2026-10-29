@@ -1,11 +1,9 @@
 """Membership endpoints for Spec §2A.5."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentActor, get_current_actor, get_db
-from app.models.org import LC
 from app.repositories import membership as repo
 from app.schemas.membership import (
     ActionResult,
@@ -31,33 +29,20 @@ def list_members(
     """Summary list of current members matching Spec §2A.5 (listMembers)."""
     actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
-    filter_lc_id: int | None = None
-    if query.lcId:
-        if query.lcId.isdigit():
-            filter_lc_id = int(query.lcId)
-        else:
-            slug = query.lcId.removeprefix("lc-").lower()
-            lc_obj = db.execute(select(LC).where(func.lower(LC.name) == slug)).scalar_one_or_none()
-            if lc_obj:
-                filter_lc_id = lc_obj.id
+    filter_lc_id = int(query.lcId) if query.lcId and query.lcId.isdigit() else None
 
     result = repo.list_members_summary(
         db,
         actor_contexts,
         search=query.search,
-        sort_field=query.sortField,
-        sort_direction=query.sortDirection,
+        sort_field=query.sort.field if query.sort else "lastName",
+        sort_direction=query.sort.direction if query.sort else "asc",
         page=query.page,
         page_size=query.pageSize,
         filter_lc_id=filter_lc_id,
     )
 
-    return Page[MemberSummaryRow](
-        items=result["rows"],
-        total=result["total"],
-        page=query.page,
-        pageSize=query.pageSize,
-    )
+    return Page[MemberSummaryRow](rows=result["rows"], total=result["total"])
 
 
 @router.post("", response_model=AddMemberResult)

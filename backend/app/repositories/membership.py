@@ -1,32 +1,49 @@
 """Membership repository queries and lifecycle mutations.
 
 Implements Spec §2A.5, §3.4, §3.6, §5.1, and §8.4.
+
+"Current membership" is never a stored flag — it's derived from
+`start_date`/`end_date` at query time (spec §4.1, §5.1), so a membership
+change (position, function, team, leaving) only ever needs an end-date on the
+old row and a new row, never an update to some `is_current` column that could
+drift out of sync.
 """
 
 from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.permissions import (
     POSITION_RANKS,
     MembershipContext,
+    can_add_member,
     can_extend_term,
     can_move_to_team,
+    can_view_membership,
+    get_acting_membership,
+    position_level,
     resolve_widest_scope,
 )
 from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, Position, Term
 from app.models.person import Person, PersonStatus
+from app.repositories.lc import refresh_person_timezone
 
 
 def get_active_memberships_for_person(
     session: Session, person_id: int, as_of: date | None = None
 ) -> Sequence[Membership]:
-    """Memberships for person_id that are current as of as_of (default: today)."""
+    """Memberships for `person_id` that are current as of `as_of` (default: today).
+
+    A membership is current when it has started (`start_date <= as_of`) and
+    either has no end date yet or hasn't ended (`end_date IS NULL OR
+    end_date >= as_of`). A person can hold several concurrent memberships
+    (spec §5.1), so this can return more than one row.
+    """
     ref_date = as_of if as_of is not None else date.today()
     stmt = select(Membership).where(
         Membership.person_id == person_id,
@@ -36,11 +53,43 @@ def get_active_memberships_for_person(
     return session.execute(stmt).scalars().all()
 
 
+def _position_rank(pos: Position | None) -> int:
+    """`position.rank` when populated, else the spec §2 fallback by key."""
+    pos_key = pos.key if pos else "member"
+    return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+
+
+def _audit_actor(actor_memberships: Sequence[MembershipContext]) -> dict[str, int | None]:
+    """Who to name on an audit row: the actor's highest-ranking membership and their person."""
+    acting = get_acting_membership(actor_memberships)
+    return {
+        "actor_membership_id": acting.membership_id if acting else None,
+        "actor_person_id": acting.person_id if acting else None,
+    }
+
+
+def _resolve_term_id(session: Session, term_id: int | None, start_date: date) -> int | None:
+    """The term a new membership belongs to, or None if there isn't a valid one.
+
+    An explicit `term_id` must exist; otherwise the term covering `start_date`
+    (the latest-starting one if several overlap).
+    """
+    if term_id is not None:
+        return term_id if session.get(Term, term_id) else None
+    stmt = (
+        select(Term.id)
+        .where(Term.start_date <= start_date, Term.end_date >= start_date)
+        .order_by(Term.start_date.desc())
+        .limit(1)
+    )
+    return session.execute(stmt).scalar_one_or_none()
+
+
 def build_membership_context(session: Session, membership: Membership) -> MembershipContext:
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
     pos_key = pos.key if pos else "member"
-    rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    rank = _position_rank(pos)
     can_add_same_rank = getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"})
 
     lc = session.get(LC, membership.lc_id)
@@ -165,7 +214,11 @@ def list_members_summary(
             " ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else ""
         )
 
-        primary_lc = lcs.get(p_memberships[0].lc_id)
+        # A person with memberships in several LCs shows their most recent one: that
+        # LC, and the roles they hold in it (concurrent functions stay listed together).
+        latest = max(p_memberships, key=lambda m: (m.start_date, m.id))
+        p_memberships = [m for m in p_memberships if m.lc_id == latest.lc_id]
+        primary_lc = lcs.get(latest.lc_id)
         lc_payload = {
             "id": str(primary_lc.id) if primary_lc else "",
             "name": primary_lc.name if primary_lc else "",
@@ -177,7 +230,7 @@ def list_members_summary(
             pos = positions.get(m.position_id)
             fn = functions.get(m.function_id) if m.function_id else None
             pos_key = pos.key if pos else "member"
-            rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+            rank = _position_rank(pos)
 
             roles_payload.append(
                 {
@@ -260,29 +313,26 @@ def add_member(
     actor_memberships: Sequence[MembershipContext],
     *,
     email: str,
-    lc_id: int | str,
+    lc_id: int,
     position_key: str,
     start_date: date,
     end_date: date,
     first_name: str | None = None,
     last_name: str | None = None,
     function_key: str | None = None,
-    team_id: int | str | None = None,
-    term_id: int | str | None = None,
+    team_id: int | None = None,
+    term_id: int | None = None,
     confirmed_existing: bool = False,
 ) -> dict[str, Any]:
     """Add a member per Spec §2A.5, §3.4, §3.6, and §5.1."""
     if end_date < start_date:
         return {"status": "rejected", "message": "The end date must be on or after the start date."}
 
-    lc = None
-    if isinstance(lc_id, int) or (isinstance(lc_id, str) and lc_id.isdigit()):
-        lc = session.get(LC, int(lc_id))
-    elif isinstance(lc_id, str):
-        slug = lc_id.removeprefix("lc-").lower()
-        lc = session.execute(select(LC).where(func.lower(LC.name) == slug)).scalar_one_or_none()
+    lc = session.get(LC, lc_id)
     if not lc:
         return {"status": "rejected", "message": "LC not found."}
+    if not lc.active:
+        return {"status": "rejected", "message": "That LC is inactive."}
 
     pos = session.execute(select(Position).where(Position.key == position_key)).scalar_one_or_none()
     if not pos:
@@ -293,6 +343,33 @@ def add_member(
         func = session.execute(
             select(Function).where(Function.key == function_key)
         ).scalar_one_or_none()
+        if func is None:
+            return {"status": "rejected", "message": "Function not found."}
+
+    # Authorise before touching the person table: a denied actor must not be able
+    # to probe which emails exist (via `confirm_existing`). Spec §3.4, §3.6.
+    allowed, reason = can_add_member(
+        actor_memberships,
+        target_lc_id=lc.id,
+        target_lc_type=lc.type.value,
+        target_position_key=pos.key,
+        target_position_rank=_position_rank(pos),
+        target_position_level=position_level(pos.key),
+        target_function_id=func.id if func else None,
+        target_team_id=team_id,
+    )
+    if not allowed:
+        return {"status": "rejected", "message": reason}
+
+    # Same rule as moveToTeam: a team must belong to the target LC and function.
+    if team_id is not None:
+        team = session.get(Team, team_id)
+        if team is None or team.lc_id != lc.id or team.function_id != (func.id if func else None):
+            return {"status": "rejected", "message": "Choose a team in the same LC and function."}
+
+    resolved_term_id = _resolve_term_id(session, term_id, start_date)
+    if resolved_term_id is None:
+        return {"status": "rejected", "message": "No term covers that start date."}
 
     clean_email = email.strip().lower()
 
@@ -382,39 +459,15 @@ def add_member(
             old_m.end_date = new_end
             session.flush()
 
-            acting = actor_memberships[0] if actor_memberships else None
             record_audit(
                 session,
                 action="membership.end_term",
                 resource_type="membership",
                 resource_id=old_m.id,
                 summary="Membership ended automatically due to transfer to another LC",
-                actor_membership_id=acting.membership_id if acting else None,
+                **_audit_actor(actor_memberships),
                 diff={"before": str(old_end), "after": str(new_end)},
             )
-
-    # Resolve term_id if not provided
-    resolved_term_id = 1
-    if term_id is not None:
-        if isinstance(term_id, int) or (isinstance(term_id, str) and str(term_id).isdigit()):
-            resolved_term_id = int(term_id)
-        elif isinstance(term_id, str):
-            term_obj = session.execute(
-                select(Term).where(Term.name == term_id)
-            ).scalar_one_or_none()
-            if term_obj:
-                resolved_term_id = term_obj.id
-
-    resolved_team_id: int | None = None
-    if team_id is not None:
-        if isinstance(team_id, int) or (isinstance(team_id, str) and str(team_id).isdigit()):
-            resolved_team_id = int(team_id)
-        elif isinstance(team_id, str):
-            team_obj = session.execute(
-                select(Team).where(Team.name == team_id)
-            ).scalar_one_or_none()
-            if team_obj:
-                resolved_team_id = team_obj.id
 
     # Insert new membership
     new_membership = Membership(
@@ -429,9 +482,9 @@ def add_member(
     session.add(new_membership)
     session.flush()
 
-    if resolved_team_id:
+    if team_id:
         tm = TeamMember(
-            team_id=resolved_team_id,
+            team_id=team_id,
             membership_id=new_membership.id,
             start_date=start_date,
             end_date=end_date,
@@ -440,16 +493,18 @@ def add_member(
         session.flush()
 
     # Record audit log for membership creation
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="membership.create",
         resource_type="membership",
         resource_id=new_membership.id,
         summary=f"Added member to LC {lc.name}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"after": {"lc_id": lc.id, "position_id": pos.id, "start_date": str(start_date)}},
     )
+
+    # Timezone follows the person's most recent membership (spec §4.1).
+    refresh_person_timezone(session, person_id=person.id, as_of=start_date)
 
     return {"status": "created"}
 
@@ -481,14 +536,13 @@ def extend_term(
     m.end_date = new_end_date
     session.flush()
 
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="membership.extend_term",
         resource_type="membership",
         resource_id=m.id,
         summary=f"Extended term of membership {m.id}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"before": str(old_end), "after": str(new_end_date)},
     )
 
@@ -504,7 +558,7 @@ def move_to_team(
     session: Session,
     actor_memberships: Sequence[MembershipContext],
     membership_id: int,
-    team_id: int | str,
+    team_id: int,
 ) -> dict[str, Any]:
     """Move member to a different team in same LC and function per Spec §2A.5 and §5.1."""
     m = session.get(Membership, membership_id)
@@ -515,18 +569,7 @@ def move_to_team(
     if not can_move_to_team(actor_memberships, target_ctx):
         return {"status": "rejected", "message": "You can't move this person."}
 
-    resolved_team_id: int | None = None
-    if isinstance(team_id, int) or (isinstance(team_id, str) and str(team_id).isdigit()):
-        resolved_team_id = int(team_id)
-    elif isinstance(team_id, str):
-        team_obj = session.execute(select(Team).where(Team.name == team_id)).scalar_one_or_none()
-        if team_obj:
-            resolved_team_id = team_obj.id
-
-    if not resolved_team_id:
-        return {"status": "rejected", "message": "Team not found."}
-
-    new_team = session.get(Team, resolved_team_id)
+    new_team = session.get(Team, team_id)
     if not new_team:
         return {"status": "rejected", "message": "Team not found."}
 
@@ -556,14 +599,13 @@ def move_to_team(
     session.add(new_tm)
     session.flush()
 
-    acting = actor_memberships[0] if actor_memberships else None
     record_audit(
         session,
         action="team_member.move",
         resource_type="team_member",
         resource_id=new_tm.id,
         summary=f"Moved membership {m.id} to team {new_team.name}",
-        actor_membership_id=acting.membership_id if acting else None,
+        **_audit_actor(actor_memberships),
         diff={"before": {"team_id": old_team_id}, "after": {"team_id": new_team.id}},
     )
 
@@ -583,6 +625,11 @@ def get_membership_detail(
     """Detail payload for the Manage Membership dialog per Spec §2A.5."""
     m = session.get(Membership, membership_id)
     if not m:
+        return None
+
+    # Same LC isolation as the list (§2A.5). Callers see "not found" either way, so
+    # ids in other LCs are not confirmed to exist.
+    if not can_view_membership(actor_memberships, build_membership_context(session, m)):
         return None
 
     person = session.get(Person, m.person_id)
@@ -610,7 +657,7 @@ def get_membership_detail(
     team_options = session.execute(teams_stmt).scalars().all()
 
     pos_key = pos.key if pos else "member"
-    rank = getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    rank = _position_rank(pos)
 
     return {
         "membershipId": str(m.id),

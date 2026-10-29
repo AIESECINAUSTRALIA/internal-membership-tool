@@ -18,14 +18,6 @@
  *   GET  /api/v1/members/:id               → getMembershipDetail
  *   POST /api/v1/members/:id/extend-term   → extendTerm
  *   POST /api/v1/members/:id/move-to-team  → moveToTeam
- *
- * SHAPE DIFFERENCES (backend ↔ frontend):
- *   • `Page` — backend returns `{items, total, page, pageSize}`;
- *               frontend Api expects `{rows, total}`.
- *   • `lcId` / `teamId` — frontend `Api` uses string IDs; backend schemas accept
- *               both integer IDs and string slugs (e.g. "lc-usyd").
- *   • `MemberSummaryRow.lc.type` — backend uses `"lc"|"mc"` (Enum LCType)
- *               which maps to frontend's `Level` type — already compatible.
  */
 
 import type {
@@ -54,7 +46,7 @@ const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 /**
  * Normalises an ID so that numeric strings become numbers, while slug strings
- * (e.g. "lc-usyd" from mock seed reference data) are preserved as strings.
+ * are preserved as strings.
  */
 function parseId(val: string | number | undefined | null): number | string | null {
   if (val == null) return null
@@ -117,18 +109,6 @@ async function get<T>(path: string, actorEmail: string | null): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// Backend response shapes (differ slightly from frontend Api types)
-// ---------------------------------------------------------------------------
-
-/** The backend Page schema — `items` instead of `rows`. */
-interface BackendPage<T> {
-  items: T[]
-  total: number
-  page: number
-  pageSize: number
-}
-
-// ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
 
@@ -165,21 +145,11 @@ export function createHttpApi(options: HttpApiOptions): Api {
     // -------------------------------------------------------------------
 
     async listMembers(query: MemberQuery): Promise<Page<MemberSummaryRow>> {
-      const body = {
-        search: query.search,
-        sortField: query.sort?.field ?? 'lastName',
-        sortDirection: query.sort?.direction ?? 'asc',
-        page: query.page,
-        pageSize: query.pageSize,
-        lcId: query.lcId ?? null,
-      }
-      const backendPage = await post<BackendPage<MemberSummaryRow>>(
+      return post<Page<MemberSummaryRow>>(
         '/api/v1/members/summary',
-        body,
+        query,
         email(),
       )
-      // Normalise backend {items} → frontend {rows}
-      return { rows: backendPage.items, total: backendPage.total }
     },
 
     async addMember(input: AddMemberInput): Promise<AddMemberResult> {

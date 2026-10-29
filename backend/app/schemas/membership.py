@@ -44,16 +44,19 @@ class MemberSummaryRow(BaseModel):
 
 
 class Page[T](BaseModel):
-    items: list[T]
+    rows: list[T]
     total: int
-    page: int
-    pageSize: int
+
+
+class MemberSort(BaseModel):
+    field: Literal["firstName", "lastName", "lc", "position"]
+    direction: Literal["asc", "desc"]
 
 
 class MemberQuery(BaseModel):
     search: str = ""
-    sortField: Literal["firstName", "lastName", "lc", "position"] = "lastName"
-    sortDirection: Literal["asc", "desc"] = "asc"
+    # null = no explicit sort: the server falls back to last name, ascending.
+    sort: MemberSort | None = None
     page: int = 0
     pageSize: int = 15
     lcId: str | None = None
@@ -61,17 +64,17 @@ class MemberQuery(BaseModel):
 
 class AddMemberInput(BaseModel):
     email: str
-    lcId: int | str
+    lcId: int
     positionKey: str
     functionKey: str | None = None
-    teamId: int | str | None = None
+    teamId: int | None = None
     startDate: date
     endDate: date
-    termId: int | str | None = None
+    termId: int | None = None
     firstName: str | None = None
     lastName: str | None = None
     confirmedExisting: bool = False
-    membershipId: int | str | None = None
+    membershipId: int | None = None
 
 
 class AddMemberResult(BaseModel):
@@ -113,4 +116,4 @@ class ExtendTermInput(BaseModel):
 
 
 class MoveToTeamInput(BaseModel):
-    teamId: int | str
+    teamId: int
