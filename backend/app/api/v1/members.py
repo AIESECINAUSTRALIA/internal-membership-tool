@@ -1,9 +1,11 @@
 """Membership endpoints for Spec §2A.5."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentActor, get_current_actor, get_db
+from app.models.org import LC
 from app.repositories import membership as repo
 from app.schemas.membership import (
     ActionResult,
@@ -29,7 +31,15 @@ def list_members(
     """Summary list of current members matching Spec §2A.5 (listMembers)."""
     actor_contexts = [repo.build_membership_context(db, m) for m in actor.active_memberships]
 
-    filter_lc_id = int(query.lcId) if query.lcId and query.lcId.isdigit() else None
+    filter_lc_id: int | None = None
+    if query.lcId:
+        if query.lcId.isdigit():
+            filter_lc_id = int(query.lcId)
+        else:
+            slug = query.lcId.removeprefix("lc-").lower()
+            lc_obj = db.execute(select(LC).where(func.lower(LC.name) == slug)).scalar_one_or_none()
+            if lc_obj:
+                filter_lc_id = lc_obj.id
 
     result = repo.list_members_summary(
         db,

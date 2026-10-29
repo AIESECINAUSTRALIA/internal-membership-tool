@@ -61,17 +61,17 @@ class MemberQuery(BaseModel):
 
 class AddMemberInput(BaseModel):
     email: str
-    lcId: int
+    lcId: int | str
     positionKey: str
     functionKey: str | None = None
-    teamId: int | None = None
+    teamId: int | str | None = None
     startDate: date
     endDate: date
-    termId: int | None = None
+    termId: int | str | None = None
     firstName: str | None = None
     lastName: str | None = None
     confirmedExisting: bool = False
-    membershipId: int | None = None
+    membershipId: int | str | None = None
 
 
 class AddMemberResult(BaseModel):
@@ -113,4 +113,4 @@ class ExtendTermInput(BaseModel):
 
 
 class MoveToTeamInput(BaseModel):
-    teamId: int
+    teamId: int | str

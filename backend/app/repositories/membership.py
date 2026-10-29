@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
@@ -19,7 +19,7 @@ from app.core.permissions import (
     resolve_widest_scope,
 )
 from app.models.membership import Membership, Team, TeamMember
-from app.models.org import LC, Function, Position
+from app.models.org import LC, Function, Position, Term
 from app.models.person import Person, PersonStatus
 
 
@@ -260,22 +260,27 @@ def add_member(
     actor_memberships: Sequence[MembershipContext],
     *,
     email: str,
-    lc_id: int,
+    lc_id: int | str,
     position_key: str,
     start_date: date,
     end_date: date,
     first_name: str | None = None,
     last_name: str | None = None,
     function_key: str | None = None,
-    team_id: int | None = None,
-    term_id: int | None = None,
+    team_id: int | str | None = None,
+    term_id: int | str | None = None,
     confirmed_existing: bool = False,
 ) -> dict[str, Any]:
     """Add a member per Spec §2A.5, §3.4, §3.6, and §5.1."""
     if end_date < start_date:
         return {"status": "rejected", "message": "The end date must be on or after the start date."}
 
-    lc = session.get(LC, lc_id)
+    lc = None
+    if isinstance(lc_id, int) or (isinstance(lc_id, str) and lc_id.isdigit()):
+        lc = session.get(LC, int(lc_id))
+    elif isinstance(lc_id, str):
+        slug = lc_id.removeprefix("lc-").lower()
+        lc = session.execute(select(LC).where(func.lower(LC.name) == slug)).scalar_one_or_none()
     if not lc:
         return {"status": "rejected", "message": "LC not found."}
 
@@ -389,7 +394,27 @@ def add_member(
             )
 
     # Resolve term_id if not provided
-    resolved_term_id = term_id or 1
+    resolved_term_id = 1
+    if term_id is not None:
+        if isinstance(term_id, int) or (isinstance(term_id, str) and str(term_id).isdigit()):
+            resolved_term_id = int(term_id)
+        elif isinstance(term_id, str):
+            term_obj = session.execute(
+                select(Term).where(Term.name == term_id)
+            ).scalar_one_or_none()
+            if term_obj:
+                resolved_term_id = term_obj.id
+
+    resolved_team_id: int | None = None
+    if team_id is not None:
+        if isinstance(team_id, int) or (isinstance(team_id, str) and str(team_id).isdigit()):
+            resolved_team_id = int(team_id)
+        elif isinstance(team_id, str):
+            team_obj = session.execute(
+                select(Team).where(Team.name == team_id)
+            ).scalar_one_or_none()
+            if team_obj:
+                resolved_team_id = team_obj.id
 
     # Insert new membership
     new_membership = Membership(
@@ -404,9 +429,9 @@ def add_member(
     session.add(new_membership)
     session.flush()
 
-    if team_id:
+    if resolved_team_id:
         tm = TeamMember(
-            team_id=team_id,
+            team_id=resolved_team_id,
             membership_id=new_membership.id,
             start_date=start_date,
             end_date=end_date,
@@ -479,7 +504,7 @@ def move_to_team(
     session: Session,
     actor_memberships: Sequence[MembershipContext],
     membership_id: int,
-    team_id: int,
+    team_id: int | str,
 ) -> dict[str, Any]:
     """Move member to a different team in same LC and function per Spec §2A.5 and §5.1."""
     m = session.get(Membership, membership_id)
@@ -490,7 +515,18 @@ def move_to_team(
     if not can_move_to_team(actor_memberships, target_ctx):
         return {"status": "rejected", "message": "You can't move this person."}
 
-    new_team = session.get(Team, team_id)
+    resolved_team_id: int | None = None
+    if isinstance(team_id, int) or (isinstance(team_id, str) and str(team_id).isdigit()):
+        resolved_team_id = int(team_id)
+    elif isinstance(team_id, str):
+        team_obj = session.execute(select(Team).where(Team.name == team_id)).scalar_one_or_none()
+        if team_obj:
+            resolved_team_id = team_obj.id
+
+    if not resolved_team_id:
+        return {"status": "rejected", "message": "Team not found."}
+
+    new_team = session.get(Team, resolved_team_id)
     if not new_team:
         return {"status": "rejected", "message": "Team not found."}
 

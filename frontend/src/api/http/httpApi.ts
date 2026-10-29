@@ -22,8 +22,8 @@
  * SHAPE DIFFERENCES (backend ↔ frontend):
  *   • `Page` — backend returns `{items, total, page, pageSize}`;
  *               frontend Api expects `{rows, total}`.
- *   • `lcId` / `teamId` — frontend `Api` uses string IDs everywhere;
- *               backend schemas use integers. We coerce at the boundary.
+ *   • `lcId` / `teamId` — frontend `Api` uses string IDs; backend schemas accept
+ *               both integer IDs and string slugs (e.g. "lc-usyd").
  *   • `MemberSummaryRow.lc.type` — backend uses `"lc"|"mc"` (Enum LCType)
  *               which maps to frontend's `Level` type — already compatible.
  */
@@ -47,6 +47,22 @@ import { createMockApi } from '../mock/mockApi'
 // ---------------------------------------------------------------------------
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalises an ID so that numeric strings become numbers, while slug strings
+ * (e.g. "lc-usyd" from mock seed reference data) are preserved as strings.
+ */
+function parseId(val: string | number | undefined | null): number | string | null {
+  if (val == null) return null
+  if (typeof val === 'number') return isNaN(val) ? null : val
+  const trimmed = String(val).trim()
+  if (/^\d+$/.test(trimmed)) return parseInt(trimmed, 10)
+  return trimmed
+}
 
 // ---------------------------------------------------------------------------
 // Wire the real `httpApi` on top of the mock for non-membership methods
@@ -169,18 +185,17 @@ export function createHttpApi(options: HttpApiOptions): Api {
     async addMember(input: AddMemberInput): Promise<AddMemberResult> {
       const body = {
         email: input.email,
-        // Frontend uses string IDs; backend expects integers
-        lcId: Number(input.lcId),
+        lcId: parseId(input.lcId),
         positionKey: input.positionKey,
         functionKey: input.functionKey,
-        teamId: input.teamId != null ? Number(input.teamId) : null,
+        teamId: parseId(input.teamId),
         startDate: input.startDate,
         endDate: input.endDate,
-        termId: input.termId != null ? Number(input.termId) : null,
+        termId: parseId(input.termId),
         firstName: input.firstName ?? null,
         lastName: input.lastName ?? null,
         confirmedExisting: input.confirmedExisting ?? false,
-        membershipId: input.membershipId != null ? Number(input.membershipId) : null,
+        membershipId: parseId(input.membershipId),
       }
       const result = await post<{ status: string; message?: string }>(
         '/api/v1/members',
@@ -211,8 +226,7 @@ export function createHttpApi(options: HttpApiOptions): Api {
     async moveToTeam(membershipId: string, teamId: string): Promise<ActionResult> {
       const result = await post<{ status: string; message?: string }>(
         `/api/v1/members/${membershipId}/move-to-team`,
-        // Backend expects integer teamId
-        { teamId: Number(teamId) },
+        { teamId: parseId(teamId) },
         email(),
       )
       if (result.status === 'ok') return { status: 'ok' }
