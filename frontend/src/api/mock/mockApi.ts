@@ -493,7 +493,14 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         : scope === 'function' ? (acting?.function ? shortLabel(acting.function.label) : 'your function')
         : 'All LCs'
       // No KPI catalog yet (spec §4.3 TODO), so there is nothing to plot: "No data exists".
-      return { scope, title: `Monthly activity, ${where}`, period: 'monthly', points: [] }
+      return {
+        scope,
+        kpi: null,
+        availableKpis: [],
+        title: `Monthly activity, ${where}`,
+        period: 'monthly',
+        points: [],
+      }
     },
 
     // ---- Admin console: LCs (§1.5, §2A.2) -----------------------------------
