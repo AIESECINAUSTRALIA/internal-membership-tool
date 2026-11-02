@@ -193,8 +193,12 @@ def get_attribute_value(
             AttributeValue.entity_id == entity_id,
         )
     ).scalar_one_or_none()
-    if row is None:
-        return None
+    return None if row is None else stored_value(row)
+
+
+def stored_value(row: AttributeValue) -> object | None:
+    """The single typed value held by an `attribute_value` row (whichever of
+    the four typed columns is set), or None if the value was cleared."""
     for column in _VALUE_COLUMNS:
         value: object | None = getattr(row, column)
         if value is not None:

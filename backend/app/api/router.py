@@ -2,8 +2,9 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import lcs, members
+from app.api.v1 import lcs, me, members
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(members.router)
 api_router.include_router(lcs.router)
+api_router.include_router(me.router)

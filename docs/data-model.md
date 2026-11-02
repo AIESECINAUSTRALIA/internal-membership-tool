@@ -305,6 +305,36 @@ needing a migration every time a new field or metric appears — acceptable beca
 or `kpi_record`, and because the single write path keeps the missing guarantees to a
 short, testable list rather than scattering `INSERT`s across the codebase.
 
+### Editing your own custom fields (Profile, spec §2A.9)
+
+Everyone can edit their own **person-level** custom fields on the Profile page,
+through `PATCH /api/v1/me/custom-fields` (`backend/app/api/v1/me.py`, logic in
+`backend/app/repositories/person.py`). The decisions, and why:
+
+- **Only your own record.** The endpoint takes no person id. The person is always
+  the signed-in actor, so there is no input that could point it at someone else.
+  The rank check (§3.4) doesn't apply, because you are always acting on yourself.
+  The endpoint still checks `member_record:edit` in the permission matrix, so the
+  rule stays data, not code.
+- **Locked fields are rejected, not ignored.** The body is `{attribute_key: value}`.
+  Only keys of active `attribute` rows with `applies_to = 'person'` (and, for a
+  function-scoped attribute, only if you're currently in that function) are
+  accepted. Anything else, such as `full_name`, `aiesec_email`, membership fields,
+  dates or another person's id, gets a 422 and **nothing** is saved. Name, email,
+  membership and dates are changed by an admin (§2A.2).
+- **All or nothing.** Every field is validated before any is written, and the
+  values and the audit entry share one transaction.
+- **Unchanged values aren't rewritten**, so `recorded_at` keeps meaning "last
+  changed", and saving without changes writes no audit entry.
+- **The audit entry lists which keys changed, never their values.** Custom
+  fields (dietary needs, shirt size) are personal data, and `audit_log` can never
+  be edited or deleted (§8.4), so a value written there could never be removed,
+  even by a deletion request. The entry is `action = 'person.edit'`,
+  `diff = {"changed_keys": [...]}`.
+- **`recorded_by`** is the person's acting membership (their highest-ranked
+  active one, as chosen in `app/api/deps.py`). A person with no active membership
+  can't edit (403). They see the not-allocated page anyway.
+
 ## `kpi_record`
 
 KPIs are catalogued in `attribute` like any other volatile field (`applies_to =
@@ -427,7 +457,9 @@ next to `audit_log`). Build them to the spec directly.
 `backend/app/repositories/attribute.py` is the write/read path for
 `attribute_value` (`set_attribute_value`, `get_attribute_value`,
 `validate_and_coerce`) — see "EAV" above for why writes must go through here
-rather than constructing rows directly. `backend/app/repositories/kpi.py`
+rather than constructing rows directly. `backend/app/repositories/person.py`
+is the signed-in person's own record: the `Me` payload and editing your own
+custom fields (see "Editing your own custom fields" above). `backend/app/repositories/kpi.py`
 is the write path and rollup query for `kpi_record` (`record_kpi`,
 `sum_by_function`). As more tickets add read patterns (e.g. "all memberships
 for an LC", "who leads this team"), add functions to the relevant file

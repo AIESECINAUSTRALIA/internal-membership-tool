@@ -162,6 +162,28 @@ def resolve_widest_scope(
     return widest
 
 
+def resolve_all_grants(
+    actor_memberships: Sequence[MembershipContext],
+) -> list[tuple[str, Action, Scope]]:
+    """Every (resource, action, widest scope) the actor holds (Spec §2A.9, §3.2).
+
+    The Profile page lists these. It uses `resolve_widest_scope` for each pair, so
+    what Profile shows is exactly what the server enforces.
+    """
+    position_keys = {m.position_key for m in actor_memberships}
+    pairs = {
+        (grant.resource, grant.action)
+        for grant in BASELINE_PERMISSION_MATRIX
+        if grant.position_key in position_keys
+    }
+    grants: list[tuple[str, Action, Scope]] = []
+    for resource, action in sorted(pairs):
+        scope = resolve_widest_scope(actor_memberships, resource, action)
+        if scope is not None:
+            grants.append((resource, action, scope))
+    return grants
+
+
 def get_acting_membership(
     memberships: Sequence[MembershipContext],
 ) -> MembershipContext | None:

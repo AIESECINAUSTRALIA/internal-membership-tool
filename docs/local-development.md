@@ -169,6 +169,10 @@ Then fill in `.env`:
   backend trust an `X-Actor-Email` request header as the signed-in user, so you can
   `curl` the membership API before real sign-in (ticket 7) exists. Local use only:
   never set it in a deployed environment. The tests do not need it.
+- **`VITE_DEV_ACTOR_EMAIL`**: leave blank to run the frontend fully on mock data.
+  Set it (together with `DEV_ACTOR_HEADER_ENABLED=true`) to make the Profile page
+  use the real backend as that person. See "Using the real backend for Profile"
+  below. Removed by ticket 7.
 - **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
   from the shared store (below), not by asking in Slack.
 
@@ -227,3 +231,34 @@ access to these secrets leaves:
 
 Rotate immediately, out of cycle, if a secret is ever committed, pasted into a
 chat or ticket, or otherwise exposed.
+
+---
+
+## Using the real backend for Profile
+
+Profile (`getMe`, `updateMyCustomFields`) can run against the real API before real
+sign-in exists. Everything else stays on mock data (`docs/frontend.md`).
+
+1. In `.env`, set `DEV_ACTOR_HEADER_ENABLED=true` and
+   `VITE_DEV_ACTOR_EMAIL=dev-member@aiesec.net` (any email; it just has to match the
+   person you create next).
+2. The seeds don't create people, LCs or terms, so add yourself once:
+
+   ```bash
+   docker compose exec db psql -U membership -d membership -c "
+     INSERT INTO lc (name, type, active) VALUES ('Dev LC', 'LC', true);
+     INSERT INTO term (name, start_date, end_date) VALUES ('Dev term', '2026-01-01', '2026-12-31');
+     INSERT INTO person (full_name, aiesec_email, join_date, status, timezone)
+       VALUES ('Dev Member', 'dev-member@aiesec.net', '2026-01-01', 'ACTIVE', 'Australia/Melbourne');
+     INSERT INTO membership (person_id, lc_id, position_id, term_id, start_date, end_date, is_primary)
+       SELECT p.id, l.id, pos.id, t.id, '2026-01-01', '2026-12-31', true
+       FROM person p, lc l, position pos, term t
+       WHERE p.aiesec_email = 'dev-member@aiesec.net' AND l.name = 'Dev LC'
+         AND pos.key = 'member' AND t.name = 'Dev term';"
+   ```
+
+   Make sure the membership dates cover today, or you'll land on the not-allocated page.
+3. `make seed` (if you haven't) so there are custom fields to edit, then restart:
+   `make down && make up`. Vite reads env vars only at startup.
+4. Sign in as usual. Profile now shows and saves that person's real fields.
+
