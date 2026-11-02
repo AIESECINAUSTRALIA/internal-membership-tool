@@ -51,21 +51,25 @@ def get_token_verifier(settings: Annotated[Settings, Depends(get_settings)]) -> 
 
 def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    verifier: Annotated[TokenVerifier, Depends(get_token_verifier)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AuthenticatedUser:
-    """The caller, from their Supabase access token. 401 without a valid one."""
+    """Resolve the caller from a verified Supabase access token."""
     if credentials is None:
         raise HTTPException(
             status_code=401,
             detail="Not signed in",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
     try:
+        verifier = build_token_verifier(settings)
         return verifier.verify(credentials.credentials)
     except AuthError as exc:
         headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
         raise HTTPException(
-            status_code=exc.status_code, detail=exc.detail, headers=headers
+            status_code=exc.status_code,
+            detail=exc.detail,
+            headers=headers,
         ) from exc
 
 
