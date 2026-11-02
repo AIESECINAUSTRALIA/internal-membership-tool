@@ -46,6 +46,23 @@ def position_level(position_key: str) -> Literal["lc", "mc"]:
     return "mc" if position_key in MC_POSITIONS else "lc"
 
 
+HomeChartScope = Literal["team", "function", "all"]
+
+
+def home_chart_scope(position_key: str) -> HomeChartScope:
+    """Whose data the homepage chart covers (Spec §2A.4, docs/home-chart.md):
+    Member and TL see their team, LCVP and LCP their function in their LC, MC
+    positions all LCs. Mirrors `homeChartScope` in the frontend seed.
+
+    Fallback until ticket 2 adds position columns, same pattern as `POSITION_RANKS`.
+    """
+    if position_key in MC_POSITIONS:
+        return "all"
+    if position_key in TEAM_HOLDING_POSITIONS:
+        return "team"
+    return "function"
+
+
 def scope_rank(scope: Scope) -> int:
     """Return numeric weight of scope to compare reach."""
     return SCOPE_ORDER.index(scope)
