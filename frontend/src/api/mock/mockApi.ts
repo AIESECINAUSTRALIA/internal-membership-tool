@@ -26,6 +26,7 @@ import {
   addableLcs,
   addablePositions,
   addableTeams,
+  can,
   canExtendTerm,
   canMoveToTeam,
   fixedTeam,
@@ -41,7 +42,10 @@ import type {
   ActionResult,
   AddMemberInput,
   AddMemberResult,
+  AdminPersonQuery,
+  AdminPersonRow,
   Api,
+  CreateLcInput,
   CustomField,
   CustomFieldValue,
   HomeChart,
@@ -50,6 +54,7 @@ import type {
   MemberQuery,
   MemberRole,
   MemberSummaryRow,
+  MergeLcResult,
   Me,
   MembershipDetail,
   MembershipView,
@@ -57,6 +62,8 @@ import type {
   Permission,
   Position,
   ReferenceData,
+  StateTimezone,
+  UpdateLcInput,
 } from '../types'
 import { shortLabel } from '../../lib/labels'
 import {
@@ -66,6 +73,7 @@ import {
   FUNCTIONS,
   LCS,
   PERMISSION_MATRIX,
+  STATE_TIMEZONES,
   PERSONAS,
   POSITIONS,
   TEAMS,
@@ -96,6 +104,8 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   const customFieldDefs = options.customFieldDefs ?? CUSTOM_FIELD_DEFS
 
   const db: MockDb = buildSeed(today())
+  // A copy, because LC management edits LCs and the seed constant is shared.
+  const lcs: Lc[] = LCS.map((lc) => ({ ...lc }))
   let sessionPersonId: string | null = readSession()
   let nextId = 1000
 
@@ -125,7 +135,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     return found
   }
   const lcOf = (id: string): Lc => {
-    const found = LCS.find((l) => l.id === id)
+    const found = lcs.find((l) => l.id === id)
     if (!found) throw new Error(`Unknown LC ${id}`)
     return found
   }
@@ -215,6 +225,9 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   })
 
   const reject = (message: string) => ({ status: 'rejected' as const, message })
+  const isNameTaken = (name: string, exceptId?: string) =>
+    lcs.some((l) => l.id !== exceptId && l.name.toLowerCase() === name.toLowerCase())
+  const isKnownState = (state: string) => STATE_TIMEZONES.some((row) => row.state === state)
 
   // ---- Api ----------------------------------------------------------------
   return {
@@ -247,7 +260,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     async getReferenceData(): Promise<ReferenceData> {
       await wait()
       const teams = TEAMS.map((t) => ({ ...t, leader: resolveTeamLeader(t.id) }))
-      return { lcs: LCS, positions: POSITIONS, functions: FUNCTIONS, terms: buildTerms(today()), teams }
+      return { lcs: lcs.filter((l) => l.active), positions: POSITIONS, functions: FUNCTIONS, terms: buildTerms(today()), teams }
     },
 
     async listMembers(query: MemberQuery): Promise<Page<MemberSummaryRow>> {
@@ -333,9 +346,9 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       if (end < start) return reject('The end date must be on or after the start date.')
 
       // Hierarchy rule, LC-level rule and scope, re-checked on the "server" (§3.4, §3.6).
-      const lc = LCS.find((l) => l.id === input.lcId)
+      const lc = lcs.find((l) => l.id === input.lcId)
       const pos = POSITIONS.find((p) => p.key === input.positionKey)
-      if (!lc || !pos || !addableLcs(actor, me.permissions, LCS).some((l) => l.id === lc.id)) {
+      if (!lc || !pos || !addableLcs(actor, me.permissions, lcs.filter((l) => l.active)).some((l) => l.id === lc.id)) {
         return reject("You can't add people to that LC.")
       }
       if (!addablePositions(actor, me.permissions, POSITIONS, lc).some((p) => p.key === pos.key)) {
@@ -481,6 +494,130 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         : 'All LCs'
       // No KPI catalog yet (spec §4.3 TODO), so there is nothing to plot: "No data exists".
       return { scope, title: `Monthly activity, ${where}`, period: 'monthly', points: [] }
+    },
+
+    // ---- Admin console: LCs (§1.5, §2A.2) -----------------------------------
+    // Same rules as the backend: needs `manage` on `lc`, state must be a known one,
+    // no hard delete, and a merge ends memberships and opens new ones (history is kept).
+
+    async listLcsAdmin(): Promise<Lc[]> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'lc', 'manage')) return []
+      return lcs.map((lc) => ({ ...lc }))
+    },
+
+    async listStateTimezones(): Promise<StateTimezone[]> {
+      await wait()
+      requireActor()
+      return STATE_TIMEZONES.map((row) => ({ ...row }))
+    },
+
+    async createLc(input: CreateLcInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'lc', 'manage')) return reject("You can't manage LCs.")
+      const name = input.name.trim()
+      if (!name) return reject('Enter a name for the LC.')
+      if (isNameTaken(name)) return reject('An LC with that name already exists.')
+      if (input.state !== null && !isKnownState(input.state)) return reject('Choose a valid state.')
+      lcs.push({ id: `lc-new-${nextId++}`, name, type: 'lc', state: input.state, active: true })
+      return { status: 'ok' }
+    },
+
+    async updateLc(lcId: string, changes: UpdateLcInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'lc', 'manage')) return reject("You can't manage LCs.")
+      const lc = lcs.find((l) => l.id === lcId)
+      if (!lc) return reject('That LC no longer exists.')
+      if (changes.name !== undefined) {
+        const name = changes.name.trim()
+        if (!name) return reject('Enter a name for the LC.')
+        if (isNameTaken(name, lc.id)) return reject('An LC with that name already exists.')
+      }
+      if (changes.state !== undefined && !isKnownState(changes.state)) return reject('Choose a valid state.')
+
+      if (changes.name !== undefined) lc.name = changes.name.trim()
+      if (changes.state !== undefined) lc.state = changes.state
+      if (changes.active !== undefined) lc.active = changes.active
+      return { status: 'ok' }
+    },
+
+    async mergeLc(sourceId: string, targetId: string): Promise<MergeLcResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'lc', 'manage')) return reject("You can't manage LCs.")
+      const source = lcs.find((l) => l.id === sourceId)
+      const target = lcs.find((l) => l.id === targetId)
+      if (!source || !target) return reject('That LC no longer exists.')
+      if (source.id === target.id) return reject('Choose a different LC to merge into.')
+      if (!source.active) return reject('That LC is already inactive.')
+      if (!target.active) return reject('You cannot merge into an inactive LC.')
+      if (source.type === 'mc' || target.type === 'mc') return reject('The MC cannot be merged.')
+
+      const mergeDate = today()
+      const dayBefore = dayjs(mergeDate).subtract(1, 'day').format('YYYY-MM-DD')
+      let membershipsMoved = 0
+      let futureRepointed = 0
+
+      for (const m of db.memberships.filter((x) => x.lcId === source.id && x.endDate >= mergeDate)) {
+        if (m.startDate >= mergeDate) {
+          // Not started yet, so there is no history to keep: just change the LC.
+          m.lcId = target.id
+          futureRepointed++
+          continue
+        }
+        // Started already: end it yesterday and open a new one in the target from today.
+        // Its past records stay with the old membership, so they still count towards the source.
+        const originalEnd = m.endDate
+        m.endDate = dayBefore
+        db.memberships.push({ ...m, id: `m-merge-${nextId++}`, lcId: target.id, startDate: mergeDate, endDate: originalEnd, teamId: null })
+        membershipsMoved++
+      }
+
+      source.active = false
+      return {
+        status: 'ok',
+        summary: {
+          membershipsMoved,
+          futureMembershipsRepointed: futureRepointed,
+          teamsCreated: 0,
+          teamsReused: 0,
+          leadersNotCarried: 0,
+        },
+      }
+    },
+
+    async listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>> {
+      await wait()
+      const { me } = requireActor()
+      // Admin-only, all-or-nothing scope (§2A.2): unlike the member list, there is no
+      // narrower cut to apply, so a missing grant simply returns nothing (deny by default).
+      if (widestScope(me.permissions, 'person', 'manage') === null) return { rows: [], total: 0 }
+
+      let rows: AdminPersonRow[] = db.people.map((p) => ({
+        id: p.id,
+        firstName: p.firstName,
+        lastName: p.lastName,
+        email: p.email,
+        active: db.memberships.some((m) => m.personId === p.id && isActive(m, today())),
+      }))
+
+      const needle = query.search.trim().toLowerCase()
+      if (needle) {
+        rows = rows.filter((r) =>
+          [r.firstName, r.lastName, `${r.firstName} ${r.lastName}`, r.email].some((s) =>
+            s.toLowerCase().includes(needle),
+          ),
+        )
+      }
+
+      const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
+      rows.sort((a, b) => collator.compare(a.lastName, b.lastName) || collator.compare(a.firstName, b.firstName))
+
+      const start = query.page * query.pageSize
+      return { rows: rows.slice(start, start + query.pageSize), total: rows.length }
     },
   }
 }

@@ -1,11 +1,10 @@
-"""Every versioned API route, mounted under `/api/v1` by `app/main.py`.
-
-Add a feature's router here: `api_router.include_router(people.router)`.
-"""
+"""Top-level API router mounting all versioned sub-routers."""
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth
+from app.api.v1 import auth, lcs, members
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(members.router)
+api_router.include_router(lcs.router)

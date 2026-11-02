@@ -34,9 +34,54 @@ are uppercase (`'LC'` / `'MC'`), enforced by a `CHECK` constraint generated
 from `LCType` in `app/models/org.py`.
 
 - `name` is unique — two entities can't share a display name.
-- `active` is a soft-disable flag. An LC is never hard-deleted once it has
-  any history (memberships, teams, KPI records) pointing at it — see spec
-  §1.5.
+- `active` is a soft-disable flag. **LCs are never hard-deleted**: "delete"
+  in the Admin console means marking the LC inactive, and it can be marked
+  active again. Memberships, teams and KPI history keep pointing at an
+  inactive LC. Inactive LCs cannot receive new members or be merge targets.
+- `state` is the Australian state or territory (`NSW`, `VIC`, …). It is a
+  foreign key to `state_timezone`, so only known states can be stored. The
+  MC has no state.
+
+#### `state_timezone`
+
+A small lookup: state → IANA timezone (e.g. `NSW` → `Australia/Sydney`).
+Config data seeded by its migration, not editable at runtime. Sydney/Melbourne
+time (`Australia/Melbourne`) is the default when an LC has no state.
+
+#### How an LC's state reaches `person.timezone`
+
+`person.timezone` always comes from the LC of the person's **most recent
+active membership** (latest `start_date`), looked up through `lc.state` →
+`state_timezone`. `refresh_person_timezone` (`app/repositories/lc.py`) applies
+this rule. It runs when:
+
+- a member is added or transferred (`add_member`),
+- an LC's state is changed (everyone currently in that LC is refreshed),
+- LCs are merged.
+
+A person with no active membership keeps their last timezone.
+
+#### Merging two LCs
+
+`merge_lcs` merges a **source** LC into a **target** LC as of a merge date
+(default today). Nothing in the past is rewritten (spec §5.1), so reports for
+any earlier period do not change.
+
+| Record | What happens |
+|---|---|
+| Membership active at the merge date | Ended the day before the merge date. A new membership (same person, position, function, term, end date) opens in the target from the merge date. |
+| Membership that starts after the merge date | Pointed at the target LC. It has no history yet. |
+| Membership already ended | Untouched, stays under the source. |
+| **KPI records** | Untouched. They stay on the old membership, so they keep counting towards the **source** LC. KPIs logged after the merge go on the new membership and count towards the target. |
+| Team in a current or future term | Copied to the target (a target team with the same function, term and name is reused). The source team is left as it was. |
+| Team assignment (`team_member`) | Ended the day before the merge date, and a new one opens for the new membership in the target team. |
+| Team leader | Carried to the target team if it has no leader. If it already has one, the target's leader is kept and the merge result reports it. |
+| Team in a past term | Untouched. |
+| Source LC | Marked inactive. |
+| `person.timezone` | Refreshed for everyone moved. |
+
+Merging is refused if the LCs are the same, either is inactive or the MC. Each
+ended or opened membership and the merge itself are audit-logged.
 
 ### `term`
 
@@ -353,8 +398,8 @@ the same PR.
 |---|---|---|
 | `person` contact data | `personal_email` and `phone` columns | Removed. Only `aiesec_email` is collected (spec §4.1, §10) |
 | `person` name | One `full_name` column | First and last name (spec §2A.5) |
-| `person.timezone` | Absent | Added, set from the LC's state (spec §4.1) |
-| `lc.state` | Absent | Added (nullable), plus a `state_timezone` lookup table (spec §4.1) |
+| `person.timezone` | Added, set from the LC of the most recent membership | Same (spec §4.1) |
+| `lc.state` | Added (nullable, FK to `state_timezone`) | Same (spec §4.1) |
 | `membership.end_date` | Nullable | Required when adding a membership (spec §5.3) |
 | `position.rank` | Lower number = more senior (LCP = 1) | Higher number = higher position (Member = 1 … MCP = 7) (spec §2) |
 | `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |

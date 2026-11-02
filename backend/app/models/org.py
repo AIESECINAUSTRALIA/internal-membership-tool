@@ -9,7 +9,7 @@ runtime without a developer touching code (spec §1.5).
 import enum
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, Integer, String
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -31,6 +31,22 @@ class LC(Base):
         Enum(LCType, name="lctype", native_enum=False, length=10, create_constraint=True)
     )
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Australian state/territory; drives members' timezone via `state_timezone`.
+    state: Mapped[str | None] = mapped_column(ForeignKey("state_timezone.state"), nullable=True)
+
+
+class StateTimezone(Base):
+    """Lookup: Australian state/territory abbreviation → IANA timezone.
+
+    Config data seeded in its migration — not runtime-editable by admins.
+    The default for rows with no state (e.g. the MC) is Australia/Melbourne,
+    defined as LC_DEFAULT_TIMEZONE in app/repositories/lc.py.
+    """
+
+    __tablename__ = "state_timezone"
+
+    state: Mapped[str] = mapped_column(String, primary_key=True)
+    timezone: Mapped[str] = mapped_column(String, nullable=False)
 
 
 class Term(Base):

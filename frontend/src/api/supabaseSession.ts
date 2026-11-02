@@ -70,7 +70,13 @@ export interface MeResponse {
     id: number
     position: LookupResponse
     function: LookupResponse | null
-    lc: { id: number; name: string; type: string }
+    lc: {
+      id: number
+      name: string
+      type: string
+      state: string | null
+      active: boolean
+    }
     team: { id: number; name: string } | null
     start_date: string
     end_date: string | null
@@ -102,7 +108,7 @@ export function meFromResponse(body: MeResponse, positions: Position[]): Me {
         }
       : { id: '', firstName: body.email.split('@')[0], lastName: '', email: body.email, customFields: [] },
     memberships: body.memberships.map((m): MembershipView => {
-      const lc: Lc = { id: String(m.lc.id), name: m.lc.name, type: m.lc.type === 'MC' ? 'mc' : 'lc' }
+      const lc: Lc = {id: String(m.lc.id), name: m.lc.name, type: m.lc.type === 'MC' ? 'mc' : 'lc', state: m.lc.state, active: m.lc.active,}
       const fn: FunctionRef | null = m.function ? { key: m.function.key, label: m.function.label } : null
       return {
         id: String(m.id),

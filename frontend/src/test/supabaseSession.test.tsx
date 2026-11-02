@@ -63,7 +63,7 @@ const ACTIVE_LCVP: MeResponse = {
       id: 11,
       position: { key: 'lcvp', label: 'LC Vice President' },
       function: { key: 'ogv', label: 'Outgoing Global Volunteer' },
-      lc: { id: 3, name: 'USYD', type: 'LC' },
+      lc: { id: 3, name: 'USYD', type: 'LC', state: 'NSW', active: true },
       team: { id: 5, name: 'oGV Team 1' },
       start_date: '2020-01-01',
       end_date: null,
@@ -110,7 +110,7 @@ describe('meFromResponse', () => {
         id: '11',
         position: POSITIONS.find((p) => p.key === 'lcvp'),
         function: { key: 'ogv', label: 'Outgoing Global Volunteer' },
-        lc: { id: '3', name: 'USYD', type: 'lc' },
+        lc: { id: '3', name: 'USYD', type: 'lc', state: 'NSW', active: true,},
         team: { id: '5', name: 'oGV Team 1' },
         startDate: '2020-01-01',
         endDate: null,
@@ -130,7 +130,7 @@ describe('meFromResponse', () => {
   it('gives an unknown position the most restrictive defaults', () => {
     const body: MeResponse = {
       ...ACTIVE_LCVP,
-      memberships: [{ ...ACTIVE_LCVP.memberships[0], position: { key: 'mystery', label: 'Mystery' }, lc: { id: 1, name: 'MC', type: 'MC' } }],
+      memberships: [{ ...ACTIVE_LCVP.memberships[0], position: { key: 'mystery', label: 'Mystery' }, lc: { id: 1, name: 'MC', type: 'MC', state: null, active: true } }],
     }
     const [membership] = meFromResponse(body, POSITIONS).memberships
     expect(membership.position).toEqual({

@@ -20,7 +20,10 @@ from app.core.auth import AuthenticatedUser, AuthError, TokenVerifier, build_tok
 from app.db.session import SessionLocal
 from app.models.membership import Membership
 from app.models.person import Person, PersonStatus
-from app.repositories.membership import get_active_memberships_for_person
+from app.repositories.membership import (
+    build_membership_context,
+    get_active_memberships_for_person,
+)
 
 # `auto_error=False` so a missing header reaches our code and gets the same 401 as a
 # bad token, rather than FastAPI's default 403.
@@ -95,16 +98,29 @@ class CurrentActor:
 
 
 def get_current_actor(person: CurrentPerson, db: DbSession) -> CurrentActor:
-    """The signed-in person, for endpoints that act on data (e.g. `api/v1/members.py`).
+    """Resolve the authenticated actor and their active memberships.
 
-    Same token check as `/me`. Unlike `/me` (which reports "not allocated" to the
-    frontend), a caller with no matching `person` gets 401 here.
+    Authentication is handled by CurrentPerson, which depends on
+    the verified user from CurrentUser.
     """
     if person is None:
-        raise HTTPException(status_code=401, detail="No person found for this account")
-    # Access follows the dates (spec §4.1).
-    active_memberships = get_active_memberships_for_person(db, person.id, as_of=date.today())
-    acting = active_memberships[0] if active_memberships else None
+        raise HTTPException(
+            status_code=401,
+            detail="No person found for this account",
+        )
+
+    active_memberships = get_active_memberships_for_person(
+        db,
+        person.id,
+        as_of=date.today(),
+    )
+
+    acting = max(
+        active_memberships,
+        key=lambda m: build_membership_context(db, m).position_rank,
+        default=None,
+    )
+
     return CurrentActor(
         person=person,
         active_memberships=active_memberships,

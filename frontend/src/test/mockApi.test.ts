@@ -252,3 +252,53 @@ describe('profile', () => {
     expect(after.person.email).toBe(before.person.email)
   })
 })
+
+describe('LC management (§1.5)', () => {
+  it('refuses every LC change to someone without `manage` on `lc`', async () => {
+    const api = await apiAs('lcvp')
+    expect(await api.listLcsAdmin()).toEqual([])
+    expect((await api.createLc({ name: 'New', state: 'WA' })).status).toBe('rejected')
+    expect((await api.updateLc('lc-usyd', { name: 'Renamed' })).status).toBe('rejected')
+    expect((await api.mergeLc('lc-mu', 'lc-usyd')).status).toBe('rejected')
+  })
+
+  it('rejects an unknown state and a duplicate name', async () => {
+    const api = await apiAs('mcvp')
+    expect(await api.createLc({ name: 'Bad', state: 'XX' })).toMatchObject({ status: 'rejected' })
+    expect(await api.createLc({ name: 'usyd', state: 'NSW' })).toMatchObject({ status: 'rejected' })
+    expect(await api.updateLc('lc-mu', { state: 'XX' })).toMatchObject({ status: 'rejected' })
+  })
+
+  it('marking an LC inactive hides it from reference data but keeps it in the admin list', async () => {
+    const api = await apiAs('mcvp')
+    await api.updateLc('lc-unsw', { active: false })
+
+    expect((await api.getReferenceData()).lcs.map((l) => l.id)).not.toContain('lc-unsw')
+    const unsw = (await api.listLcsAdmin()).find((l) => l.id === 'lc-unsw')
+    expect(unsw?.active).toBe(false)
+
+    await api.updateLc('lc-unsw', { active: true })
+    expect((await api.getReferenceData()).lcs.map((l) => l.id)).toContain('lc-unsw')
+  })
+
+  it('a merge ends current memberships and opens new ones in the target, keeping history', async () => {
+    const api = await apiAs('mcvp')
+    const before = (await api.listMembers({ ...ALL, lcId: 'lc-mu' })).total
+    expect(before).toBeGreaterThan(0)
+
+    const result = await api.mergeLc('lc-mu', 'lc-usyd')
+
+    expect(result.status).toBe('ok')
+    if (result.status === 'ok') expect(result.summary.membershipsMoved).toBe(before)
+    expect((await api.listMembers({ ...ALL, lcId: 'lc-mu' })).total).toBe(0)
+    expect((await api.listLcsAdmin()).find((l) => l.id === 'lc-mu')?.active).toBe(false)
+  })
+
+  it('refuses to merge into itself, into an inactive LC, or the MC', async () => {
+    const api = await apiAs('mcvp')
+    expect(await api.mergeLc('lc-mu', 'lc-mu')).toMatchObject({ status: 'rejected' })
+    expect(await api.mergeLc('lc-mu', 'lc-mc')).toMatchObject({ status: 'rejected' })
+    await api.updateLc('lc-unsw', { active: false })
+    expect(await api.mergeLc('lc-mu', 'lc-unsw')).toMatchObject({ status: 'rejected' })
+  })
+})

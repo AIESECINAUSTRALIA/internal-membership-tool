@@ -29,8 +29,21 @@ POSITION_RANKS: dict[str, int] = {
     "mcp": 7,
 }
 
+MC_POSITIONS: set[str] = {"mcd", "mcvp", "mcp"}
+# Admin positions (spec §1.4 "Data / Privacy admin") are position-linked, not
+# named people. The position itself is not seeded yet (spec §12 #12), so nobody
+# holds this key today; the grants below take effect once it is created.
+ADMIN_POSITIONS: set[str] = {"admin"}
 PRESIDENTIAL_POSITIONS: set[str] = {"lcp", "mcp"}
 TEAM_HOLDING_POSITIONS: set[str] = {"member", "team_leader"}
+
+
+def position_level(position_key: str) -> Literal["lc", "mc"]:
+    """Which kind of entity a position belongs to (Spec §3.6).
+
+    Fallback until ticket 2 adds `position.level`, same pattern as `POSITION_RANKS`.
+    """
+    return "mc" if position_key in MC_POSITIONS else "lc"
 
 
 def scope_rank(scope: Scope) -> int:
@@ -53,10 +66,10 @@ BASELINE_PERMISSION_MATRIX: list[MatrixGrant] = [
     MatrixGrant("member", "member_record", "edit", "own"),
     MatrixGrant("member", "kpi_record", "view", "own"),
     MatrixGrant("member", "kpi_record", "create", "own"),
-    # Team Leader: team scope. Can view, add and extend within their team; no move.
+    # Team Leader: sees the whole LC; adds and extends within their team only; no move.
     MatrixGrant("team_leader", "member_record", "view", "own"),
     MatrixGrant("team_leader", "member_record", "edit", "own"),
-    MatrixGrant("team_leader", "membership", "view", "team"),
+    MatrixGrant("team_leader", "membership", "view", "lc"),
     MatrixGrant("team_leader", "membership", "create", "team"),
     MatrixGrant("team_leader", "membership", "edit", "team"),
     MatrixGrant("team_leader", "kpi_record", "view", "team"),
@@ -106,6 +119,12 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
             MatrixGrant(_mc_pos, "function", "manage", "all"),
         ]
     )
+
+
+# LC management (spec §1.5, §2A.2) is org-wide configuration, so MC and admin
+# positions hold it at the widest scope.
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
 
 
 @dataclass(frozen=True)
@@ -227,6 +246,36 @@ def can_act_on_target(
 
     # Check 2: Rank hierarchy (strictly below)
     return target.position_rank < acting.position_rank
+
+
+def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, set state, deactivate or merge LCs (spec §1.5).
+
+    Needs `manage` on `lc` at scope `all`. There is no target person, so the
+    hierarchy and self-action checks from `can_act_on_target` do not apply.
+    """
+    return resolve_widest_scope(actor_memberships, "lc", "manage") == "all"
+
+
+def can_view_membership(
+    actor_memberships: Sequence[MembershipContext],
+    target: MembershipContext,
+) -> bool:
+    """Read access to one membership: matrix grant whose scope reaches the target.
+
+    No rank check: viewing is not a write, so the §3.4 hierarchy rule does not apply.
+    """
+    scope = resolve_widest_scope(actor_memberships, "membership", "view")
+    if scope is None:
+        return False
+    return scope_covers(
+        scope=scope,
+        actor_memberships=actor_memberships,
+        target_person_id=target.person_id,
+        target_lc_id=target.lc_id,
+        target_function_id=target.function_id,
+        target_team_id=target.team_id,
+    )
 
 
 def can_extend_term(

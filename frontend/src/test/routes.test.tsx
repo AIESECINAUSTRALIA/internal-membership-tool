@@ -75,13 +75,23 @@ describe('route guards', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Sign out' }))
     expect(await screen.findByRole('button', { name: 'Sign in' })).toBeInTheDocument()
   })
+
+  it('allows an LC Vice President to access ODM', async () => {
+    await renderApp('lcvp', '/odm', true)
+    expect(await screen.findByRole('heading', { name: 'ODM' })).toBeInTheDocument()
+  })
+
+  it('blocks a Member from accessing ODM directly', async () => {
+    await renderApp('member', '/odm', true)
+    expect(await screen.findByRole('heading', { name: 'Page not available' })).toBeInTheDocument()
+  })
 })
 
 describe('placeholder pages and the profile', () => {
-  it('shows Tracking, Data and Settings in the sidebar for a Vice President', async () => {
+  it('shows Tracking, Data, ODM and Settings in the sidebar for a Vice President', async () => {
     await renderApp('lcvp', '/', true)
     const nav = await screen.findByRole('navigation', { name: 'Main' })
-    for (const label of ['Home', 'Membership', 'Tracking', 'Data', 'Settings']) {
+    for (const label of ['Home', 'Membership', 'Tracking', 'Data', 'ODM', 'Settings']) {
       expect(nav).toHaveTextContent(label)
     }
   })

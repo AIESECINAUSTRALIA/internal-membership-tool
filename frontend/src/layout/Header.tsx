@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router-dom'
 
 import { useAuth } from '../auth/authContext'
-import { actingMembership } from '../auth/permissions'
+import { actingMembership, can } from '../auth/permissions'
 import { fullName, roleLabel } from '../lib/labels'
 import { HEADER_HEIGHT } from './Sidebar'
 
@@ -17,7 +17,10 @@ function useContextLine(): string {
 
 /**
  * Slim header: a menu button on small screens, the person's context, and the profile
- * icon. The profile menu has Profile and Sign out (spec §2A, §2A.9).
+ * icon. The profile menu has Profile and Sign out (spec §2A, §2A.9), plus "Admin
+ * console" for anyone holding `admin_console:view` — the ONLY link to it anywhere in
+ * the main app (spec §2A.2: "a normal user never sees a link to it"), so it only
+ * renders for people the permission matrix actually grants it to.
  */
 export function Header({ onMenuClick }: { onMenuClick: () => void }) {
   const { me, signOut } = useAuth()
@@ -28,6 +31,7 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
   if (!me) return null
   const { firstName, lastName } = me.person
   const initials = `${firstName.charAt(0)}${lastName.charAt(0)}`.toUpperCase()
+  const showAdminLink = can(me.permissions, 'admin_console', 'view')
 
   const handleSignOut = async () => {
     setAnchor(null)
@@ -93,6 +97,11 @@ export function Header({ onMenuClick }: { onMenuClick: () => void }) {
         <MenuItem component={RouterLink} to="/profile" onClick={() => setAnchor(null)}>
           Profile
         </MenuItem>
+        {showAdminLink && (
+          <MenuItem component={RouterLink} to="/admin" onClick={() => setAnchor(null)}>
+            Admin console
+          </MenuItem>
+        )}
         <MenuItem onClick={handleSignOut}>Sign out</MenuItem>
       </Menu>
     </Box>

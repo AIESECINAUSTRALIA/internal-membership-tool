@@ -1,7 +1,8 @@
 """FastAPI application entrypoint.
 
-Serves a root greeting, a liveness probe, and the versioned API under
-`/api/v1` (see `app/api/router.py`). Configuration comes from `app/config.py`.
+Creates the app, configures CORS for the local Vite dev server, and mounts the
+versioned API routers from `app/api/router.py`. Endpoints themselves live under
+`app/api/v1/`; this file stays thin.
 """
 
 from fastapi import FastAPI
@@ -31,5 +32,5 @@ def read_root() -> dict[str, str]:
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    """Liveness probe. A database readiness check is added with app/db/session.py."""
+    """Liveness probe."""
     return {"status": "ok"}

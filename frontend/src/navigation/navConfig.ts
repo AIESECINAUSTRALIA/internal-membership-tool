@@ -11,7 +11,7 @@
 import type { Gated } from '../auth/permissions'
 
 export interface NavItem extends Gated {
-  key: 'home' | 'membership' | 'tracking' | 'data' | 'settings'
+  key: 'home' | 'membership' | 'tracking' | 'data' | 'settings' | 'odm'
   label: string
   path: string
 }
@@ -30,6 +30,14 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Data',
     path: '/data',
     requires: { resource: 'analytics_report', action: 'view', minScope: 'team' },
+    built: true,
+  },
+    // EB+ only.
+  {
+    key: 'odm',
+    label: 'ODM',
+    path: '/odm',
+    requires: { resource: 'odm', action: 'view', minScope: 'lc', },
     built: true,
   },
   // Everyone signed in; the Functions screen inside it is MC only (§2A.8).

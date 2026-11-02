@@ -24,6 +24,8 @@ class LcOut(BaseModel):
     id: int
     name: str
     type: str  # "LC" or "MC"
+    state: str | None
+    active: bool
 
 
 class TeamOut(BaseModel):
