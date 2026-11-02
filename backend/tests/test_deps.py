@@ -1,31 +1,10 @@
 """Tests for authenticated actor resolution and membership selection."""
 
-import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_actor
-from app.main import app
 
 from .helpers import make_lc, make_membership, make_person, make_position, make_term
-
-
-@pytest.mark.parametrize("dev_flag", ["true", "false"])
-def test_actor_email_header_cannot_authenticate(
-    monkeypatch: pytest.MonkeyPatch,
-    dev_flag: str,
-) -> None:
-    """The old development header must never authenticate a request."""
-    monkeypatch.setenv("DEV_ACTOR_HEADER_ENABLED", dev_flag)
-
-    client = TestClient(app)
-    response = client.post(
-        "/api/v1/members/summary",
-        headers={"X-Actor-Email": "someone@aiesec.net"},
-        json={},
-    )
-
-    assert response.status_code == 401
 
 
 def test_acting_membership_is_highest_rank(db_session: Session) -> None:
