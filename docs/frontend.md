@@ -59,6 +59,23 @@ the product title instead.
 2. In `api/index.ts`, replace `createMockApi(...)` with it.
 3. Delete `api/mock/`, and the `?as=` persona code in `api/index.ts`.
 
+**Where it stands.** `api/http/httpApi.ts` is the real implementation, method by
+method. So far it has Profile's two methods, `getMe` and `updateMyCustomFields`
+(backend: `/api/v1/me`). `api/index.ts` uses them only when `VITE_DEV_ACTOR_EMAIL`
+is set (see `docs/local-development.md`); otherwise the whole app stays on the mock.
+As more endpoints land, add their methods to `httpApi.ts` and to the list in
+`api/index.ts`.
+
+Two things to know while it's half real:
+
+- **Sign-in is still the mock's.** Signing in and out works as before, but while you
+  are signed in, `getMe` asks the backend, which answers as the `VITE_DEV_ACTOR_EMAIL`
+  person, whatever persona you picked. Ticket 7 replaces the header with the real
+  Supabase token in `httpApi.ts`.
+- **Pages can disagree.** The header, nav and Profile show the backend's person; the
+  other pages still run on the mock persona. That's expected until their methods
+  move to `httpApi.ts`.
+
 The mock enforces the same rules the spec gives the server (scope in the query, no email in
 the member list, the hierarchy rule, the LC-level rule, transfers end old memberships).
 `src/test/mockApi.test.ts` pins those rules, so the real backend can be checked against the

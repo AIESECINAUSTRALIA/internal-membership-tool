@@ -59,6 +59,41 @@ def _position_rank(pos: Position | None) -> int:
     return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
 
 
+def person_name_parts(person: Person) -> tuple[str, str]:
+    """(first name, last name) for display.
+
+    `person` still has a single `full_name` column (docs/data-model.md, "Known
+    differences from the spec"), so this splits on the first space until the
+    schema-alignment ticket adds `first_name` / `last_name`. Every caller goes
+    through here, so that ticket only has to change this one function.
+    """
+    first_name = getattr(person, "first_name", "") or person.full_name.split(" ")[0]
+    last_name = getattr(person, "last_name", "") or (
+        " ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else ""
+    )
+    return first_name, last_name
+
+
+def position_payload(pos: Position | None, lc: LC | None) -> dict[str, Any]:
+    """The `Position` shape from frontend/src/api/types.ts for a membership's position.
+
+    `level`, `presidential`, `homeChartScope` and `holdsTeam` are derived here
+    until the schema-alignment ticket adds them as columns (spec §2).
+    """
+    pos_key = pos.key if pos else "member"
+    is_mc = lc is not None and lc.type.value == "MC"
+    return {
+        "key": pos_key,
+        "label": pos.label if pos else pos_key,
+        "level": "mc" if is_mc else "lc",
+        "rank": _position_rank(pos),
+        "canAddSameRank": getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"}),
+        "presidential": pos_key in {"lcp", "mcp"},
+        "homeChartScope": "all" if is_mc else "team",
+        "holdsTeam": pos_key in {"member", "team_leader"},
+    }
+
+
 def _audit_actor(actor_memberships: Sequence[MembershipContext]) -> dict[str, int | None]:
     """Who to name on an audit row: the actor's highest-ranking membership and their person."""
     acting = get_acting_membership(actor_memberships)
@@ -209,10 +244,7 @@ def list_members_summary(
         if not person:
             continue
 
-        first_name = getattr(person, "first_name", "") or person.full_name.split(" ")[0]
-        last_name = getattr(person, "last_name", "") or (
-            " ".join(person.full_name.split(" ")[1:]) if " " in person.full_name else ""
-        )
+        first_name, last_name = person_name_parts(person)
 
         # A person with memberships in several LCs shows their most recent one: that
         # LC, and the roles they hold in it (concurrent functions stay listed together).
@@ -229,25 +261,11 @@ def list_members_summary(
         for m in p_memberships:
             pos = positions.get(m.position_id)
             fn = functions.get(m.function_id) if m.function_id else None
-            pos_key = pos.key if pos else "member"
-            rank = _position_rank(pos)
 
             roles_payload.append(
                 {
                     "membershipId": str(m.id),
-                    "position": {
-                        "key": pos_key,
-                        "label": pos.label if pos else pos_key,
-                        "level": "mc" if primary_lc and primary_lc.type.value == "MC" else "lc",
-                        "rank": rank,
-                        "canAddSameRank": getattr(pos, "can_add_same_rank", False)
-                        or (pos_key in {"lcp", "mcp"}),
-                        "presidential": pos_key in {"lcp", "mcp"},
-                        "homeChartScope": "all"
-                        if primary_lc and primary_lc.type.value == "MC"
-                        else "team",
-                        "holdsTeam": pos_key in {"member", "team_leader"},
-                    },
+                    "position": position_payload(pos, primary_lc),
                     "function": {"key": fn.key, "label": fn.label} if fn else None,
                     "teamId": str(team_by_membership[m.id]) if m.id in team_by_membership else None,
                 }
@@ -656,23 +674,10 @@ def get_membership_detail(
         teams_stmt = teams_stmt.where(Team.id != curr_team.id)
     team_options = session.execute(teams_stmt).scalars().all()
 
-    pos_key = pos.key if pos else "member"
-    rank = _position_rank(pos)
-
     return {
         "membershipId": str(m.id),
         "personName": person.full_name if person else "",
-        "position": {
-            "key": pos_key,
-            "label": pos.label if pos else pos_key,
-            "level": "mc" if lc and lc.type.value == "MC" else "lc",
-            "rank": rank,
-            "canAddSameRank": getattr(pos, "can_add_same_rank", False)
-            or (pos_key in {"lcp", "mcp"}),
-            "presidential": pos_key in {"lcp", "mcp"},
-            "homeChartScope": "all" if lc and lc.type.value == "MC" else "team",
-            "holdsTeam": pos_key in {"member", "team_leader"},
-        },
+        "position": position_payload(pos, lc),
         "function": {"key": func.key, "label": func.label} if func else None,
         "lc": {
             "id": str(lc.id) if lc else "",
