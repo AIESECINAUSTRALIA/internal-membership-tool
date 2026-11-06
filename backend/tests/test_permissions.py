@@ -7,6 +7,7 @@ from app.core.permissions import (
     MembershipContext,
     can_add_member,
     can_extend_term,
+    can_manage_attribute,
     can_manage_lc,
     can_move_to_team,
     can_view_membership,
@@ -314,3 +315,17 @@ def test_lc_level_positions_cannot_manage_lcs(position_key: str) -> None:
 
 def test_actor_without_memberships_cannot_manage_lcs() -> None:
     assert can_manage_lc([]) is False
+
+
+@pytest.mark.parametrize("position_key", ["mcd", "mcvp", "mcp", "admin"])
+def test_mc_and_admin_positions_can_manage_attributes(position_key: str) -> None:
+    assert can_manage_attribute([_context_for(position_key)]) is True
+
+
+@pytest.mark.parametrize("position_key", ["member", "team_leader", "lcvp", "lcp"])
+def test_lc_level_positions_cannot_manage_attributes(position_key: str) -> None:
+    assert can_manage_attribute([_context_for(position_key)]) is False
+
+
+def test_actor_without_memberships_cannot_manage_attributes() -> None:
+    assert can_manage_attribute([]) is False

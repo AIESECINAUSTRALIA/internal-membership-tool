@@ -3,8 +3,12 @@
  * `navigation/navConfig.ts`, which a normal user never sees a link to.
  *
  * Every screen from §1.5 is listed here so the pattern for adding the next one is
- * obvious, but only LCs, People and Auditing are built this term; the rest are
- * `built: false` (hidden by `visibleNavItems`) until their own tickets land.
+ * obvious, but only LCs, People, Metrics & custom fields and Auditing are built this
+ * term; the rest are `built: false` (hidden by `visibleNavItems`) until their own
+ * tickets land.
+ *
+ * KPIs and custom fields are ONE entry, not two: both are rows of the same `attribute`
+ * catalog (§4.2), so they share a screen with a filter.
  */
 import type { Gated } from '../auth/permissions'
 
@@ -15,9 +19,8 @@ export interface AdminNavItem extends Gated {
     | 'memberships'
     | 'teams'
     | 'positions_functions'
-    | 'kpis'
+    | 'attributes'
     | 'terms'
-    | 'custom_fields'
     | 'permission_matrix'
     | 'auditing'
   label: string
@@ -42,15 +45,14 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
     requires: { resource: 'position', action: 'manage' },
     built: false,
   },
-  { key: 'kpis', label: 'KPIs', path: '/admin/kpis', requires: { resource: 'attribute', action: 'manage' }, built: false },
-  { key: 'terms', label: 'Terms', path: '/admin/terms', requires: { resource: 'term', action: 'manage' }, built: false },
   {
-    key: 'custom_fields',
-    label: 'Custom fields',
-    path: '/admin/custom-fields',
+    key: 'attributes',
+    label: 'Metrics & custom fields',
+    path: '/admin/attributes',
     requires: { resource: 'attribute', action: 'manage' },
-    built: false,
+    built: true,
   },
+  { key: 'terms', label: 'Terms', path: '/admin/terms', requires: { resource: 'term', action: 'manage' }, built: false },
   {
     key: 'permission_matrix',
     label: 'Permission matrix',
