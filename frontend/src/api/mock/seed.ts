@@ -11,7 +11,9 @@ import dayjs from 'dayjs'
 
 import type {
   Action,
+  CatalogAttribute,
   CustomField,
+  CustomFieldValue,
   FunctionDef,
   IsoDate,
   Lc,
@@ -137,6 +139,7 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'admin_console', 'view', 'all'),
   row(positionKey, 'lc', 'manage', 'all'),
   row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'attribute', 'manage', 'all'), // KPIs and custom fields (§1.5, §4.2)
   row(positionKey, 'audit_log', 'view', 'all'),
 ]
 
@@ -236,6 +239,98 @@ export const PERSONAS: Record<PersonaKey, string> = {
  * Adding a row here (or passing `customFieldDefs` to `createMockApi`) makes the box appear.
  */
 export const CUSTOM_FIELD_DEFS: Omit<CustomField, 'value'>[] = []
+
+/** One attribute catalog row in the mock. `recorded` stands in for the `attribute_value`
+ * / `kpi_record` rows that reference it: any entry means it is in use. */
+export interface DbAttribute extends Omit<CatalogAttribute, 'inUse'> {
+  recorded: Exclude<CustomFieldValue, null>[]
+}
+
+/**
+ * The Admin console's attribute catalog (§4.2): the same PLACEHOLDER rows as
+ * `backend/app/seeds/seed_attributes.py`, not the real KPI list (a spec TODO, §12).
+ * Not linked to `CUSTOM_FIELD_DEFS` above, so the Profile page is unaffected.
+ */
+export const ATTRIBUTES: DbAttribute[] = [
+  {
+    id: 'attr-shirt-size',
+    key: 'shirt_size',
+    label: 'Shirt size',
+    appliesTo: 'person',
+    dataType: 'enum',
+    unit: null,
+    enumOptions: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
+    validation: { required: false },
+    functionKey: null,
+    active: true,
+    recorded: ['M'],
+  },
+  {
+    id: 'attr-dietary',
+    key: 'dietary_requirements',
+    label: 'Dietary requirements',
+    appliesTo: 'person',
+    dataType: 'text',
+    unit: null,
+    enumOptions: null,
+    validation: { required: false },
+    functionKey: null,
+    active: true,
+    recorded: [],
+  },
+  {
+    id: 'attr-onboarding',
+    key: 'onboarding_complete',
+    label: 'Onboarding complete',
+    appliesTo: 'membership',
+    dataType: 'boolean',
+    unit: null,
+    enumOptions: null,
+    validation: { required: false },
+    functionKey: null,
+    active: true,
+    recorded: [true],
+  },
+  {
+    id: 'attr-ol-signups',
+    key: 'ol_signups',
+    label: 'OL Signups',
+    appliesTo: 'kpi',
+    dataType: 'number',
+    unit: 'count',
+    enumOptions: null,
+    validation: { required: true, min: 0 },
+    functionKey: null,
+    active: true,
+    recorded: [3],
+  },
+  {
+    id: 'attr-ep-interviews',
+    key: 'ep_interviews',
+    label: 'EP Interviews',
+    appliesTo: 'kpi',
+    dataType: 'number',
+    unit: 'count',
+    enumOptions: null,
+    validation: { required: true, min: 0 },
+    functionKey: null,
+    active: true,
+    recorded: [],
+  },
+  {
+    id: 'attr-eps-matched',
+    key: 'eps_matched',
+    label: 'EPs Matched',
+    appliesTo: 'kpi',
+    dataType: 'number',
+    unit: 'count',
+    enumOptions: null,
+    validation: { required: true, min: 0 },
+    functionKey: null,
+    active: true,
+    recorded: [],
+  },
+]
 
 export function buildSeed(today: IsoDate): MockDb {
   const t = dayjs(today)

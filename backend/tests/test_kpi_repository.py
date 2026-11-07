@@ -300,3 +300,49 @@ def test_sum_by_function_includes_memberships_without_a_function(db_session: Ses
         ("test_bd", "Test BD", 10),
         (None, None, 5),
     }
+
+
+def test_retired_kpi_rejects_new_records_but_still_counts_in_rollups(db_session: Session) -> None:
+    lc = make_lc(db_session)
+    membership = make_membership(
+        db_session,
+        person=make_person(db_session),
+        lc=lc,
+        position=make_position(db_session),
+        term=make_term(db_session),
+        function=make_function(db_session),
+    )
+    attribute = make_kpi_attribute(db_session, key="test_retired_kpi")
+    record_kpi(
+        db_session,
+        attribute=attribute,
+        membership_id=membership.id,
+        value_number=4,
+        period_start=date(2026, 6, 1),
+        period_end=date(2026, 6, 30),
+        source=KpiSource.LEADER,
+        recorded_by_membership_id=membership.id,
+    )
+    attribute.active = False
+    db_session.flush()
+
+    with pytest.raises(AttributeValidationError, match="retired"):
+        record_kpi(
+            db_session,
+            attribute=attribute,
+            membership_id=membership.id,
+            value_number=1,
+            period_start=date(2026, 6, 1),
+            period_end=date(2026, 6, 30),
+            source=KpiSource.LEADER,
+            recorded_by_membership_id=membership.id,
+        )
+
+    rows = sum_by_function(
+        db_session,
+        lc_id=lc.id,
+        attribute_id=attribute.id,
+        period_start=date(2026, 6, 1),
+        period_end=date(2026, 6, 30),
+    )
+    assert [row[-1] for row in rows] == [4]

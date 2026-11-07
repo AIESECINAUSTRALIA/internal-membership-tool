@@ -205,3 +205,36 @@ def test_rejects_kpi_attribute(db_session: Session, entity_type: AttributeEntity
         .all()
     )
     assert rows == []
+
+
+def test_retired_attribute_rejects_new_values_but_keeps_old_ones(db_session: Session) -> None:
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(db_session, key="test_retired_field")
+    set_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+        raw_value="kept",
+        recorded_by_membership_id=recorder_id,
+    )
+    attribute.active = False
+    db_session.flush()
+
+    with pytest.raises(AttributeValidationError, match="retired"):
+        set_attribute_value(
+            db_session,
+            attribute=attribute,
+            entity_type=AttributeEntityType.PERSON,
+            entity_id=person.id,
+            raw_value="new",
+            recorded_by_membership_id=recorder_id,
+        )
+
+    stored = get_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+    )
+    assert stored == "kept"

@@ -121,10 +121,11 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
     )
 
 
-# LC management (spec §1.5, §2A.2) is org-wide configuration, so MC and admin
-# positions hold it at the widest scope.
+# LC and attribute-catalog management (spec §1.5, §2A.2) are org-wide configuration,
+# so MC and admin positions hold them at the widest scope.
 for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "attribute", "manage", "all"))
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,15 @@ def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
     hierarchy and self-action checks from `can_act_on_target` do not apply.
     """
     return resolve_widest_scope(actor_memberships, "lc", "manage") == "all"
+
+
+def can_manage_attribute(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, edit or retire KPIs and custom fields (spec §1.5, §4.2).
+
+    Needs `manage` on `attribute` at scope `all`. Like `can_manage_lc`, there is
+    no target person, so the hierarchy and self-action checks do not apply.
+    """
+    return resolve_widest_scope(actor_memberships, "attribute", "manage") == "all"
 
 
 def can_view_membership(
