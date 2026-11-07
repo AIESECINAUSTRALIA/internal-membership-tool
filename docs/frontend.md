@@ -10,6 +10,7 @@ frontend/src/
   theme/theme.ts        ALL styling. Colours, type, component looks. Read its header comment.
   api/types.ts          Every shape the UI knows about the server, and the one `Api` interface.
   api/index.ts          THE swap point: chooses the mock or the real backend.
+  api/supabaseSession.ts Real Google sign-in (Supabase) + GET /api/v1/me. See docs/auth.md.
   api/mock/             In-memory fake server (seed data, rules). Delete when the backend is real.
   auth/permissions.ts   Pure functions: permission gating and the hierarchy rule (§3.4).
   auth/guards.tsx       Route guards, driven by the signed-in person's `me` payload.
@@ -72,9 +73,17 @@ person, the LC Vice President in oGV at USYD, whose first name is `temp_oGV` (la
 blank). There are no real or realistic names. Tests find people by id (for example
 `p-sam`), never by name. Change names in `buildSeed` in `api/mock/seed.ts`.
 
+## Real sign-in (Google) vs the development sign-in
+
+`VITE_AUTH_MODE` chooses. `mock` is the development sign-in described below, and the
+default on the dev server and in tests. `supabase` shows a single "Sign in with Google"
+button and asks the backend's `GET /api/v1/me` who you are and what you may do; it's the
+default for production builds (`api/authMode.ts`). The rest of the data stays mock for now. See `docs/auth.md`
+for the flow and the one-time Supabase/Google setup.
+
 ## Signing in as a different role (development only)
 
-The sign-in page has one plain button. It signs in as an LC Vice President. To try another
+In mock mode the sign-in page has one plain button. It signs in as an LC Vice President. To try another
 role, load the sign-in page with `?as=`:
 
 | URL | Signs in as |
