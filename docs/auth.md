@@ -1,5 +1,25 @@
 # Authentication (sign in with an aiesec.net Google account)
 
+> **Being replaced: sign-in is moving to EXPA.** Decided 2026-11-09. This page still
+> describes the code as it is today: Google sign-in through Supabase Auth (DEV-36). After
+> the EXPA sign-in tickets land:
+>
+> - People sign in with their **EXPA account** (`auth.aiesec.org`; EXPA staging on the dev
+>   environment).
+> - The **backend** runs the OAuth exchange, reads `currentPerson { id aiesec_email }`
+>   from the GIS API, and discards EXPA's tokens.
+> - It matches on a new `person.expa_id`, falling back to `aiesec_email` on first sign-in.
+> - The browser gets our own 12-hour server-side session in an HttpOnly `__session`
+>   cookie.
+> - `@supabase/supabase-js` is removed with no replacement.
+>
+> These stay as they are: the `ALLOWED_EMAIL_DOMAINS` check, the not-allocated rules,
+> `/me`, permission resolution, the sign-in audit entry and "no backend sign-in stub".
+>
+> Full design: §5.4 of `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`. This
+> page gets rewritten for EXPA in the same PR as the backend change. Don't do new Supabase
+> setup.
+
 How people sign in to the Membership Tool, how the backend knows who they are, and the
 one-time setup needed to make it work. Written for someone with no prior context.
 Spec: §9 (Authentication) and §2A.3 (Sign in).

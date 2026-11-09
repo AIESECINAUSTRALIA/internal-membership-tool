@@ -64,7 +64,7 @@ is still a `TODO:` (§4.3, §12).
 
 | Step | What happens | Where in this spec |
 |---|---|---|
-| 1 | A member signs in with their AIESEC Google account. The tool matches the email to a `person` and finds their active `membership`: *Member, oGV, LC X, this term*. | §9, §3.2 |
+| 1 | A member signs in with their EXPA account. The tool matches them to a `person` and finds their active `membership`: *Member, oGV, LC X, this term*. | §9, §3.2 |
 | 2 | Their Team Leader enters "12 sign-ups" for the week of 1–7 Sep. This creates **one** `kpi_record` row. No totals are stored. | §4.3, §5.2 |
 | 3 | The oGV LCVP opens the function dashboard. The permission matrix gives them `function` scope, so they see every oGV team in LC X, and nothing from other functions. | §3, §6 |
 | 4 | The LCP picks a custom range, 1 Aug – 30 Sep. The dashboard sums `kpi_record` over that range for the whole LC. | §6 |
@@ -205,10 +205,10 @@ Items marked *blocked* cannot be finalised until the named `TODO:` in §12 is re
 
 | Area | This term (MVP) | Phase 2 | Blocked by (§12) |
 |---|---|---|---|
-| Auth (§9) | Google OAuth with AIESEC accounts; email → `person` match; deny-by-default | Shared login with the website | #7 |
+| Auth (§9) | EXPA OAuth with AIESEC accounts; EXPA id / email → `person` match; deny-by-default | Shared login with the website; using EXPA positions for access | #7 |
 | Data model (§4) | Core tables, `attribute` catalog, `kpi_record`, privacy tables, migrations | Exchange SU tables (design room only, §4.4) | #1–4 |
 | Permission matrix (§3) | Matrix table, resolution logic, in-app editing, audited; hierarchy rule (§3.4); MC write access to any LC | — | #5, #6, #10, #14 |
-| Pages (§2A) | Sign in (placeholder, then Google), homepage (default), membership summary (add, move team, extend term), tracking, data, settings (placeholder, plus a Functions screen for MC), profile (permissions, position history, edit own record, sign out) | Customisable homepage (V2) | #12, #16 |
+| Pages (§2A) | Sign in (placeholder, then EXPA), homepage (default), membership summary (add, move team, extend term), tracking, data, settings (placeholder, plus a Functions screen for MC), profile (permissions, position history, edit own record, sign out) | Customisable homepage (V2) | #12, #16 |
 | Frontend standards (§2A.11) | Material UI, WCAG AA, light theme, brand logos and accent colours | Dark mode (V2) | — |
 | Admin management (§1.5) | In-app CRUD for LCs, people, memberships, teams, positions, functions, KPIs, terms, custom fields, in the separate Admin console (§2A.2) | — | #1, #13 |
 | KPI entry (§5) | Single and grid entry, CSV import, edit audit | Notifications / reminders for data entry | #4, #6 |
@@ -365,7 +365,7 @@ flowchart TB
 
 | Page | Area | Who sees it | Status |
 |---|---|---|---|
-| Sign in | Main app | Everyone | MVP (placeholder first, then Google, §2A.3) |
+| Sign in | Main app | Everyone | MVP (placeholder first, then EXPA, §2A.3) |
 | Homepage | Main app | Everyone signed in | MVP default layout; customisable is **V2 [Phase 2]** |
 | Membership summary | Main app | Anyone with `view` on `membership` | MVP |
 | Tracking | Main app | Member, Team Leader, VP (personal); TL, VP, LCP, MC (track others) | MVP |
@@ -389,8 +389,8 @@ and have no page assigned yet. See §12, open question 16.
 - **Backend:** access requires the `admin_console` resource, granted through the
   permission matrix to **positions**, held by at least two people (§2). There is no
   admin account tied to an individual. "Separate login" means a separate entry point
-  and session that demands the admin permission. It still uses the same managed Google
-  sign-in (§9), because the project does not build custom auth. See §12, open question 13.
+  and session that demands the admin permission. It still uses the same EXPA sign-in
+  (§9), because the project does not build custom auth. See §12, open question 13.
 
 Admin console screens. Each is gated by `manage` on its own resource (§3) and follows
 the shared table rules in §2A.
@@ -414,11 +414,11 @@ Deletion requests are not on this list yet (§8).
 
 - **Frontend (MVP):** a **placeholder** sign-in page, so the rest of the app can be
   built and demoed before OAuth is wired. **When OAuth is implemented (§9), the page
-  becomes a single "Sign in with Google" button** and the placeholder is removed. No
+  becomes a single "Sign in with EXPA" button** and the placeholder is removed. No
   other sign-in option exists. The Admin console has its own equivalent page.
   A person who has not been allocated, or whose term has ended, sees a single page
   saying **"You have not been allocated yet, please contact someone in your EB or MC"**
-  (§9). If the Google session expires, the user is sent back to this sign-in page.
+  (§9). If the session expires, the user is sent back to this sign-in page.
   There is no separate "session expired" page.
 - **Backend:** the placeholder is a development stub only. It must be switched off by
   configuration in any deployed environment, so it can never grant real access. Real
@@ -780,7 +780,7 @@ permission rules) is a **lookup / config table**, never a hardcoded enum in code
 | `term` | A named period (e.g. `26.1`, `26.2`, `27.1`) for time-scoping memberships and KPIs. Memberships fall into terms **by their dates** (§5.3). | `id`, `name`, `start_date`, `end_date` |
 | `position` | Lookup. `level` says whether it is an LC-level or MC-level position (§3.6). `can_add_same_rank` allows the president exception (§3.4). | `id`, `key`, `label`, `rank`, `level` (`lc` / `mc`), `can_add_same_rank`, `active` |
 | `function` | Lookup. | `id`, `key`, `label`, `active` |
-| `person` | One human. PII lives **only** here. | `id`, `full_name`, `preferred_name`, `aiesec_email` (unique, the primary identifier), `timezone`, `join_date`, `status` (`active` / `alumnus` / `inactive` / `anonymised`), `anonymised_at` (nullable) |
+| `person` | One human. PII lives **only** here. | `id`, `full_name`, `preferred_name`, `aiesec_email` (unique, the primary identifier), `expa_id` (unique, nullable: EXPA's person id, set on first sign-in, §9), `timezone`, `join_date`, `status` (`active` / `alumnus` / `inactive` / `anonymised`), `anonymised_at` (nullable) |
 | `membership` | A person's assignment. A person may have several concurrent rows. | `id`, `person_id`, `lc_id`, `position_id`, `function_id` (nullable for non-functional positions), `term_id`, `start_date` (required), `end_date` (required when adding; editable to extend or shorten a term), `is_primary` |
 | `team` | A team inside a function within an LC. | `id`, `lc_id`, `function_id`, `term_id`, `name`, `leader_membership_id` (nullable) |
 | `team_member` | Membership ↔ team. | `id`, `team_id`, `membership_id`, `start_date`, `end_date` (nullable) |
@@ -792,8 +792,8 @@ Notes:
 - **Access control reads `membership`**, filtered to rows where
   `start_date <= today AND (end_date IS NULL OR end_date >= today)`. History is kept
   by not deleting old rows.
-- `person.aiesec_email` is the join key from the OAuth identity (§9) and the person's
-  **primary identifier**. It is the only contact detail the tool stores: **no phone
+- `person.aiesec_email` is the person's **primary identifier** and the first-sign-in join
+  key from the OAuth identity (§9). After the first sign-in, `person.expa_id` links them. It is the only contact detail the tool stores: **no phone
   number or personal email is collected.**
 - **Timezone:** when an LC is created its `state` is set. A person added to that LC gets
   their `timezone` from the state (via `state_timezone`). **Sydney/Melbourne time is
@@ -802,7 +802,7 @@ Notes:
   single value (`Australia/Sydney`) covers both. The default is a config value, not
   code. "Today" for term boundaries is evaluated in the person's timezone.
 - A person with no active membership (e.g. their term has ended, or an alumnus) can
-  still authenticate with Google but gets no access. They see the not-allocated page
+  still authenticate with EXPA but gets no access. They see the not-allocated page
   (§9).
 
 ### 4.2 EAV: attribute catalog + values
@@ -1069,6 +1069,11 @@ On an `anonymised` decision for a `person`:
 - Replace `aiesec_email` with a non-routable tombstone (e.g.
   `anon+<person_id>@invalid`) so the row can't re-link to an identity but stays
   unique.
+- Set `expa_id` to `NULL` (it identifies the person in EXPA) and revoke their sessions
+  (`user_session`, §9).
+- Backups: database backups are kept 7 days, so the person is gone from every backup
+  7 days after anonymisation. On-demand backups older than 7 days are deleted on a
+  schedule. Confirm this with the APP consult (§12 #8).
 - Set `status = 'anonymised'`, `anonymised_at = now()`.
 - Clear or generalise `attribute_value` rows where `applies_to = 'person'` and the
   attribute is personal (keep non-identifying ones if needed for stats — decide per
@@ -1137,11 +1142,16 @@ mean, and the deletion-request SLA — before launch.
 
 ## 9. Authentication
 
-- **OAuth only**, via AIESEC Google Workspace accounts (`@aiesec.net` and any other
-  official AIESEC Australia domains). No password auth, no self-service signup, no
-  custom auth code.
-- Use the platform's managed auth (Supabase Auth or equivalent per `CLAUDE.md`).
-- On login: match the verified email to `person.aiesec_email`.
+- **OAuth only**, via **EXPA** (AIESEC's own OAuth provider, `auth.aiesec.org`;
+  decided 2026-11-09). People sign in with their EXPA account. No password auth, no
+  self-service signup, no identity system of our own. The dev environment uses EXPA's
+  staging copy (`auth-staging.aiesec.org`) with test data only.
+- The **backend** runs the OAuth exchange: it swaps EXPA's code for a token using the
+  client secret, reads `currentPerson { id aiesec_email }` from the GIS GraphQL API, then
+  **discards EXPA's tokens**. We don't store them.
+- On login: match `person.expa_id` to EXPA's person `id`. On the first sign-in (no
+  `expa_id` yet), match EXPA's `aiesec_email` (lower-cased) to `person.aiesec_email`,
+  then store the `expa_id`. The email domain must be one of `ALLOWED_EMAIL_DOMAINS`.
   - **No match** → authenticated but no `person` → no access; show the
     **not-allocated page** (below). Optionally queue for an admin to link/create.
   - **Match, active membership** → load active memberships → resolve permissions
@@ -1150,16 +1160,29 @@ mean, and the deletion-request SLA — before launch.
     show the same **not-allocated page**.
   - **Not-allocated page** text: *"You have not been allocated yet, please contact
     someone in your EB or MC."*
-- Sessions handled by the managed auth provider. No long-lived tokens of our own.
-- If the Google session expires, the user is simply sent back to the sign-in page. There
+- **Sessions are ours, short and server-side.** After a successful sign-in the backend
+  creates a `user_session` row and sets an HttpOnly, Secure `__session` cookie.
+  - Sessions last **12 hours**, with no sliding renewal.
+  - Sessions can be revoked at once: on sign-out, when someone leaves, or after
+    anonymisation.
+  - The OAuth `state` parameter protects the sign-in. Non-GET API requests must come from
+    our own origin.
+  - No long-lived tokens.
+- If the session expires, the user is simply sent back to the sign-in page. There
   is no separate "session expired" page.
 - **Sign-in page:** a placeholder until OAuth is connected, then a single **"Sign in
-  with Google"** button (§2A.3). The Admin console has its own sign-in page but uses
+  with EXPA"** button (§2A.3). The Admin console has its own sign-in page but uses
   the same provider (§2A.2).
 - Each successful sign-in is written to the audit log (§8.4).
+- **Not this term (Phase 2):** using EXPA positions to grant access (access stays in our
+  own permission matrix, §3), and calling the GIS API on a user's behalf.
+- **Status:** the code still uses the interim Google sign-in via Supabase Auth (DEV-36)
+  until the EXPA sign-in tickets land. Design: §5.4 of
+  `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
 
 `TODO:` Confirm the exact set of official email domains, and whether any legitimate
-users (e.g. new members mid-onboarding) won't yet have an `@aiesec.net` address.
+users (e.g. new members mid-onboarding) won't yet have an `@aiesec.net` address, or
+have no `aiesec_email` in EXPA.
 
 ---
 
@@ -1177,8 +1200,12 @@ this product:
   A feature only a developer can reconfigure is a design flag.
 - **Budget**: combined infra for both projects ≤ ~$500 AUD/yr; target $100–350 using
   managed free/low tiers.
-- **Database**: managed Postgres that does not auto-expire data (Supabase or Neon).
-- **Hosting**: managed platform (Vercel/Netlify + Supabase). No self-hosted servers.
+- **Database**: managed Postgres that does not auto-expire data: **Cloud SQL Postgres**
+  in Sydney, with daily backups kept 7 days plus point-in-time recovery.
+- **Hosting**: **Google Cloud** for all deployment and hosting (decided 2026-11-09):
+  Cloud Run for the API and Firebase Hosting for the frontend, in Sydney. Two
+  environments, dev and prod. No self-hosted servers. Design:
+  `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
 - **File/image storage**: object storage, never bytes in DB rows. (Applies if member
   photos / document uploads are added.)
 - **Access to infra**: ≥2 GitHub org owners, ≥2 people with each critical account;
@@ -1303,7 +1330,8 @@ Everything the team must resolve. Grouped by what it blocks.
 **Blocks auth (§9):**
 
 7. Exact set of official **email domains**; handling of users without an
-   `@aiesec.net` address yet.
+   `@aiesec.net` address yet, or with no `aiesec_email` in EXPA. Also confirm with the
+   AIVP IM that EXPA honours the OAuth `state` parameter.
 
 **Blocks privacy sign-off (§8):**
 
@@ -1319,14 +1347,16 @@ Everything the team must resolve. Grouped by what it blocks.
 
 10. Which **position(s)** hold `manage` on the permission matrix and the ability to
     process deletion requests (must be ≥2 people). (§2, §3.3)
-11. Confirm all code and infra accounts are owned by **AIESEC Australia as an
-    entity**, in writing. (`CLAUDE.md`)
+11. ~~Confirm all code and infra accounts are owned by **AIESEC Australia as an
+    entity**, in writing.~~ **Resolved 2026-09-23** (`CLAUDE.md`). That covers the GCP
+    organization and billing account, GitHub, the shared EXPA developer account,
+    Cloudflare and Squarespace.
 
 **Blocks pages & navigation (§2A):**
 
 12. What the default **homepage** shows. (§2A.4)
 13. Admin console "separate login": confirm it means a separate sign-in page and
-    session using the **same Google identity**, not separate credentials (which would
+    session using the **same EXPA identity**, not separate credentials (which would
     conflict with "no custom auth", §9). Also which positions hold `admin_console`
     access (≥2 people). (§2A.2)
 14. **"MC can add anyone to any LC":** I read this as MC positions adding any LC-level
