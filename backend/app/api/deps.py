@@ -42,7 +42,9 @@ def get_db() -> Generator[Session, None, None]:
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_token_verifier(settings: Annotated[Settings, Depends(get_settings)]) -> TokenVerifier | None:
+def get_token_verifier(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> TokenVerifier | None:
     """Returns None when auth is not configured; only raises when misconfigured."""
     if not settings.supabase_url:
         return None
