@@ -42,7 +42,10 @@ def get_db() -> Generator[Session, None, None]:
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_token_verifier(settings: Annotated[Settings, Depends(get_settings)]) -> TokenVerifier:
+def get_token_verifier(settings: Annotated[Settings, Depends(get_settings)]) -> TokenVerifier | None:
+    """Returns None when auth is not configured; only raises when misconfigured."""
+    if not settings.supabase_url:
+        return None
     try:
         return build_token_verifier(settings)
     except AuthError as exc:
@@ -51,7 +54,7 @@ def get_token_verifier(settings: Annotated[Settings, Depends(get_settings)]) -> 
 
 def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    verifier: Annotated[TokenVerifier, Depends(get_token_verifier)],
+    verifier: Annotated[TokenVerifier | None, Depends(get_token_verifier)],
 ) -> AuthenticatedUser:
     """The caller, from their Supabase access token. 401 without a valid one."""
     if credentials is None:
@@ -60,6 +63,8 @@ def get_current_user(
             detail="Not signed in",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    if verifier is None:
+        raise HTTPException(status_code=503, detail="Authentication is not configured")
     try:
         return verifier.verify(credentials.credentials)
     except AuthError as exc:
