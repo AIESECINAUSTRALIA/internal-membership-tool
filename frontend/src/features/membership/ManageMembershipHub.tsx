@@ -61,6 +61,9 @@ export function ManageMembershipHub({ actor, permissions, canAddFunction, onClos
         return a.extendRoleIds.length > 0 || a.moveRoleIds.length > 0
       })
       setCandidates(manageable)
+    }, () => {
+      // Couldn't load (e.g. mock-only data under real sign-in): no candidates, not a crash.
+      if (!cancelled) setCandidates([])
     })
     return () => {
       cancelled = true

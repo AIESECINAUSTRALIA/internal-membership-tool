@@ -22,10 +22,18 @@ Monorepo, two sub-projects:
 |---|---|---|
 | Backend | `backend/` | FastAPI · SQLAlchemy 2 + Alembic · Pydantic · **uv** (`uv.lock`) · Python **3.12** |
 | Frontend | `frontend/` | Vite · React · TypeScript · **Material UI (MUI)** · **npm** (`package-lock.json`) · Node **22** (`.nvmrc`) |
-| Database | — | PostgreSQL 16, via Docker Compose |
+| Database | — | PostgreSQL 16 — Docker Compose locally, Cloud SQL (Sydney) when deployed |
+| Hosting | — | **Google Cloud (GCP)**, Sydney (`australia-southeast1`): Cloud Run (API), Cloud SQL (Postgres), Firebase Hosting (frontend + `/api` forwarding), Secret Manager, Artifact Registry |
 
-Auth is Supabase (managed OAuth); the DB is plain Postgres reached by connection
-string.
+**All deployment and hosting is on GCP** (decided 2026-11-09). **Auth is EXPA OAuth**:
+people sign in with their EXPA account (AIESEC's own OAuth provider, `auth.aiesec.org`).
+The backend runs the OAuth exchange and keeps its own short server-side sessions. The DB
+is plain Postgres reached by connection string. Design and reasons:
+`docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
+
+> **In transition.** Supabase and Vercel are being retired. Until the EXPA sign-in
+> tickets land, the code still signs in with Google through Supabase Auth
+> (`docs/auth.md`). Don't build new work on Supabase.
 
 ### Running it
 
@@ -40,6 +48,18 @@ Docker. `Makefile` is the command entrypoint (`make` lists targets):
 
 `docs/local-development.md` covers running without Docker, environment variables,
 and secret handling. `.env` is git-ignored; copy `.env.example` and fill it in.
+
+Deployed environments (being set up; see the design doc for details):
+
+| Environment | URL | EXPA | Gets new code |
+|---|---|---|---|
+| **dev** | `members-dev.aiesecaustralia.org` | EXPA staging | automatically, on every merge to `main` |
+| **prod** | `members.aiesecaustralia.org` | EXPA production | only from an approved release tag (`vX.Y.Z`) that promotes the image already tested on dev |
+
+Deploys run from GitHub Actions with Workload Identity Federation (no keys). Migrations run
+as a Cloud Run Job before the new code goes live, so every migration must work with the
+previous release too ("expand, then contract"). Never run `alembic downgrade` on prod.
+Setup is commented `gcloud` scripts in `infra/`, not Terraform.
 
 ### Quality gates
 
@@ -74,6 +94,12 @@ The next tranche of backend work — schema alignment, the permission matrix, th
 `attribute` / `kpi_record` tables, and real auth — is ticketed in
 `ticket.md` (repo root). It's a working allocation list, not a permanent roadmap:
 update or clear it as tickets land.
+
+**Deployment and EXPA sign-in** are ticketed in `tickets_sprint_6.md`. The target is a
+**showcase in the second week of December 2026** on prod with demo data, then v1 with
+real data about a month later. The showcase must never hold real member data, and a mock
+sign-in must never be enabled on a deployed environment. The EXPA developer guides
+(`12. Dev guides/`) are AIESEC International's material and stay **out of git**.
 
 ### Frontend standards
 
@@ -114,7 +140,8 @@ If a suggestion only works because one specific person understands it, that's a 
 Replaces scattered LC productivity spreadsheets with a single source-of-truth database, role-based access, analytics dashboards, and query-derived official reporting (NAMs, SONA, MTR). Full requirements spec: see `docs/membership-tool-requirements-spec.md` (or wherever this is placed in-repo).
 
 **Core pillars:**
-- **Auth:** OAuth login via AIESEC emails.
+- **Auth:** OAuth login via **EXPA** (AIESEC accounts). Match EXPA's person id
+  (`person.expa_id`), falling back to the AIESEC email on first sign-in.
 - **Access control:** two-dimensional — **position × function**, not flat role checks (positions and functions are listed in spec §2, e.g. LCVP combined with oGV). Must be implemented as a data-driven permission matrix (DB table), not hardcoded if/else logic. Who may add or track whom follows the hierarchy rule (spec §3.4).
 - **Data model:** single relational source of truth. No feature should require manually re-linking spreadsheets. KPI/productivity data granular enough that rollups and reports are computed via query, not maintained as separately-entered aggregates.
 - **Analytics:** dashboards with custom date-range filtering (not fixed presets only).
@@ -143,11 +170,15 @@ Motivation for replacing WordPress (design/speed vs. CMS usability vs. need for 
 
 | Area | Default |
 |---|---|
-| Budget | ~$500 AUD/year ceiling for hosting/infra, combined across both projects. Realistic target $100–350/year using free/managed tiers. |
-| Database | Supabase or Neon preferred — must not be a free tier that auto-expires data (avoid e.g. Render's 30-day Postgres). |
-| File/image storage | Object storage (e.g. Supabase Storage), never stored directly in DB rows. |
-| Hosting | Managed platforms over self-hosting — Vercel/Netlify, Supabase. |
-| Auth | Managed OAuth (e.g. Supabase Auth), no custom auth system. |
+| Budget | ~$500 AUD/year ceiling for hosting/infra, combined across both projects. Realistic target $100–350/year using free/managed tiers. The website's current WordPress hosting (Hostmate) is **not** counted. No Google for Nonprofits credits (not approved), so plan with none. GCP budget alert at AU$35/month; **never** an automatic billing cap (it can shut down or delete prod). |
+| Platform | **Google Cloud (GCP) for all deployment and hosting**, region `australia-southeast1` (Sydney). Projects `aiesec-au-mt-dev` and `aiesec-au-mt-prod` under the AIESEC Australia GCP organization (`aiesecaustralia.org`). |
+| Database | **Cloud SQL Postgres 16**, Sydney: one smallest shared-core instance holding `membership_dev` and `membership_prod`, kept apart by separate DB users. Daily backups kept **7 days** + point-in-time recovery (the 7 days is also the privacy bound after anonymisation). No HA. Never a tier that auto-expires data. |
+| File/image storage | **Cloud Storage** (Sydney, one bucket per environment, no public access), never stored directly in DB rows. Not created until the first upload feature needs it. |
+| Hosting | **Cloud Run** (API, scale to zero) behind **Firebase Hosting** (frontend, custom domain, free SSL, forwards `/api/**` to Cloud Run). No load balancer: it would cost ~AU$330/yr. No self-hosted servers. |
+| Auth | **EXPA OAuth** (`auth.aiesec.org`; dev uses EXPA staging). Managed by AIESEC International, so no passwords or custom identity system of ours. Developer apps are owned by the shared MC EXPA developer account, never a personal one. |
+| Domain / DNS | Subdomains of `aiesecaustralia.org` (registered at Squarespace Domains, **expires 2027-10-23**, auto-renew on). **DNS stays on Cloudflare**, which the national team owns; records for Firebase must be "DNS only" (grey cloud). This is the one exception to "everything on GCP". |
+| Infra as code | Commented, safe-to-re-run `gcloud` scripts in `infra/` plus checklists in the docs. Not Terraform. A console change gets copied back into the scripts in the same PR. |
+| Access | Google Workspace groups on `aiesecaustralia.org` (≥2 people each) hold all GCP roles, never named individuals. `hello@aiesecaustralia.org` is the break-glass org admin (Bitwarden). Offboarding checklist: `docs/access-and-ownership.md` (to be written). |
 | Code hosting | GitHub Organisation account (not personal accounts) — apply for GitHub's nonprofit program for free Team-tier features. ≥2 org owners at all times. Access via GitHub Teams tied to role, not individuals. |
 | Security | No outsourced security retainer. Instead: OWASP Top 10 as a dev checklist, Dependabot + Snyk free tier, one pre-launch external security/privacy audit, a one-page incident response plan. A genuine one-off Australian Privacy Act / APP compliance consult is worth paying for even though technical security is handled in-house. |
 | IP/ownership | All code and infra accounts owned by AIESEC Australia as an entity, confirmed in writing — never under individual personal accounts. **Confirmed 2026-09-23** (resolves spec §12 #11): everything is owned by AIESEC Australia. |

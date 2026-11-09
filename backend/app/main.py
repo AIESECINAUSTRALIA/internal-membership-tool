@@ -5,21 +5,18 @@ versioned API routers from `app/api/router.py`. Endpoints themselves live under
 `app/api/v1/`; this file stays thin.
 """
 
-import os
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.router import api_router
+from app.config import get_settings
 
 app = FastAPI(title="AIESEC Australia — Membership Tool API")
 
-# Allow the local Vite dev server to call the API during development.
-# Replaced by a config-driven allowlist in app/config.py during implementation.
-_frontend_origin = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+# Allow the frontend (the Vite dev server locally) to call the API from the browser.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_frontend_origin],
+    allow_origins=[get_settings().frontend_origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

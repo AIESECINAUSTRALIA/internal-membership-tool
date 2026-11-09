@@ -9,8 +9,9 @@ AIESEC Australia's Membership / Data Management Platform. FastAPI API + React
 |---|---|
 | Backend | Python 3.12 · FastAPI · SQLAlchemy 2 + Alembic · **uv** |
 | Frontend | Node 22 · React · TypeScript · Vite |
-| Database | PostgreSQL 16 |
-| Auth | Supabase (managed OAuth) |
+| Database | PostgreSQL 16 (Cloud SQL when deployed) |
+| Auth | EXPA OAuth (AIESEC accounts) — replacing the interim Supabase/Google sign-in |
+| Hosting | Google Cloud, Sydney: Cloud Run · Cloud SQL · Firebase Hosting |
 | Local dev | Docker Compose · Make |
 | Quality | pytest · vitest · ruff · mypy · eslint · pre-commit · GitHub Actions |
 
@@ -68,5 +69,7 @@ the database (`docker compose down -v && make bootstrap`).
 
 ## More
 
-- Running without Docker, secrets, deployment → **[docs/local-development.md](docs/local-development.md)**
+- Running without Docker, secrets → **[docs/local-development.md](docs/local-development.md)**
+- Deployment (GCP, dev and prod environments, EXPA sign-in) → `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`
+- Third-party accounts and who owns them → `docs/external-services.md`
 - Product requirements → `docs/membership-tool-requirements-spec.md`
