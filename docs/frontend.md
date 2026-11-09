@@ -81,6 +81,16 @@ button and asks the backend's `GET /api/v1/me` who you are and what you may do; 
 default for production builds (`api/authMode.ts`). The rest of the data stays mock for now. See `docs/auth.md`
 for the flow and the one-time Supabase/Google setup.
 
+> **Changing: sign-in moves to EXPA** (decided 2026-11-09, see `docs/auth.md`).
+> `supabase` mode becomes `expa`:
+> - "Sign in with EXPA" goes to `/api/v1/auth/login`.
+> - `getMe` calls `/api/v1/me` with the session cookie (`credentials: 'same-origin'`).
+> - Sign out is `POST /api/v1/auth/logout`.
+>
+> `@supabase/supabase-js`, `supabaseClient.ts`, `supabaseSession.ts`, `VITE_SUPABASE_*` and
+> `VITE_API_URL` go away. The API is always the relative `/api`, which Vite's dev proxy
+> forwards to the backend locally. `mock` mode and the `?as=` personas below don't change.
+
 ## Signing in as a different role (development only)
 
 In mock mode the sign-in page has one plain button. It signs in as an LC Vice President. To try another

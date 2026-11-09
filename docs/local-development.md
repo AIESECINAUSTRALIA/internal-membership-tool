@@ -170,7 +170,9 @@ Then fill in `.env`:
   `curl` the membership API before real sign-in (ticket 7) exists. Local use only:
   never set it in a deployed environment. The tests do not need it.
 - **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
-  from the shared store (below), not by asking in Slack.
+  from the shared store (below), not by asking in Slack. *(Being replaced by `EXPA_*`
+  settings when EXPA sign-in lands. Until then, `VITE_AUTH_MODE=mock` needs none of
+  them.)*
 - **Sign-in vars** (`VITE_AUTH_MODE`, `ALLOWED_EMAIL_DOMAINS`,
   `VITE_GOOGLE_HOSTED_DOMAIN`) — leave `VITE_AUTH_MODE=mock` to use the development
   sign-in with no Supabase at all. Set it to `supabase` for real Google sign-in; that
@@ -201,23 +203,37 @@ access granted by role via the MC.
 
 ### Deployed environments
 
-Real secrets are **never** stored in a file in a deployed environment. Each
-platform holds its own copy, set through its dashboard:
+> **Changing.** Deployment is moving to Google Cloud (decided 2026-11-09; design:
+> `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`). The table below is the
+> target. Supabase and Vercel are being retired and should not get new secrets.
 
-| Environment | Where secrets are set |
+Real secrets are **never** stored in a file in a deployed environment:
+
+| Where | Where secrets are set |
 |---|---|
-| Frontend hosting (Vercel, per `external-services.md`) | Project → Settings → Environment Variables, set separately for Preview and Production |
-| Backend hosting (not yet chosen) | that platform's env-var configuration |
-| Supabase | project settings (the origin of the keys) |
-| GitHub Actions CI | repo → Settings → Secrets and variables → Actions, referenced as `${{ secrets.NAME }}` |
+| Backend (Cloud Run, dev and prod) | **GCP Secret Manager**, one set per environment: `database-url-app`, `database-url-migrator`, `expa-client-secret`. Mounted into Cloud Run as environment variables. Non-secret settings (`EXPA_AUTH_URL`, `APP_BASE_URL`, …) are plain Cloud Run env vars |
+| Frontend (Firebase Hosting) | **No secrets.** The frontend calls the API at the relative path `/api`, so one build works in both environments |
+| GitHub Actions | **No GCP secrets.** Workflows sign in to GCP with Workload Identity Federation. Only non-secret *variables* (project IDs, region, WIF provider) live under repo → Settings → Secrets and variables → Actions → Variables |
+| EXPA developer apps | the shared MC EXPA developer account (the origin of the client ids and secrets) |
 
-Local, Preview, and Production each use **different** values (different Supabase
-projects / databases). Never point local dev at production.
+Local, dev and prod each use **different** values: different databases and different EXPA
+apps (dev uses EXPA staging). Never point local dev at prod.
 
 ### Sign-in placeholder in deployed environments
 
 Spec §2A.3: the development sign-in (the plain "Sign in" button and `?as=` personas) must
-be **off in every deployed environment**. How that's enforced:
+be **off in every deployed environment**.
+
+> **Changing.** The bullets below describe today's code (Supabase/Google, Vercel). After
+> the EXPA sign-in tickets land:
+> - `VITE_AUTH_MODE` becomes `mock | expa`, and production builds default to `expa`.
+> - The backend accepts only its own server-side session cookie (`__session`), created
+>   after a successful EXPA sign-in.
+> - Deployed builds are on Firebase Hosting, not Vercel.
+>
+> The rule doesn't change: no mock sign-in on dev or prod.
+
+How it's enforced today:
 
 - **Frontend:** a production build (`npm run build`, which is what Vercel runs) uses real
   Google sign-in unless `VITE_AUTH_MODE=mock` is set explicitly
@@ -240,11 +256,18 @@ requires one.
 The governing constraint for this project is annual turnover. When someone with
 access to these secrets leaves:
 
-1. Rotate the Supabase keys (anon key, service-role key) and the database
-   password in the Supabase dashboard.
-2. Update the new values in Bitwarden and in every deployed environment's
-   configuration.
-3. Remove the departing person's Bitwarden and platform access.
+1. Remove the person from the Google Workspace groups (this removes all their GCP
+   access), from GitHub teams and from the Bitwarden collection.
+2. If they could read prod secrets (`mt-tech-leads@`): rotate the prod database
+   passwords and the EXPA prod client secret. Add a new version in Secret Manager,
+   then redeploy the Cloud Run service so it picks up the new version.
+3. If they knew a shared login (hello email, the MC EXPA developer account): change
+   it.
+4. Update the new values in Bitwarden.
+
+The full offboarding checklist will live in `docs/access-and-ownership.md` (being
+written; until then see §10 of the GCP design doc). Until Supabase is retired, also
+rotate its keys if the person had them.
 
 Rotate immediately, out of cycle, if a secret is ever committed, pasted into a
 chat or ticket, or otherwise exposed.
