@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from app.api.v1 import auth, attributes, lcs, members
+from app.api.v1 import attributes, auth, lcs, members
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
