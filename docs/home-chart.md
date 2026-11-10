@@ -24,6 +24,7 @@ Two things decide what's on it:
    | Member, Team Leader | `team` | Logged against the viewer's current team |
    | LCVP, LCP | `function` | Every membership in the viewer's LC and function |
    | MCD, MCVP, MCP | `all` | Every LC |
+   | Any other position (e.g. `admin`) | `team` | Narrowest on purpose: an unknown position sees less, never more |
 
    Rule: `home_chart_scope` in `backend/app/core/permissions.py`.
 
@@ -45,7 +46,9 @@ Two things decide what's on it:
 - **No default and no pick → no KPI**, no points; the choice list is still returned.
 - **A default that's since been deactivated** counts as no default, not an error.
 - **Picking a KPI outside the allowed set → 400.** It is never silently swapped for
-  the default, so the chart never shows a different KPI from the one asked for.
+  the default, so the chart never shows a different KPI from the one asked for. The
+  message is the same whatever the reason (unknown, inactive, another function's), so
+  the response doesn't reveal which KPIs exist.
 - **Not allocated → 403**, with the §9 "contact your EB or MC" message.
 
 ## Why this design

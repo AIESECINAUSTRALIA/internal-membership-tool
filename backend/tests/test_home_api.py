@@ -1,8 +1,8 @@
 """Tests for the homepage chart endpoint (spec §2A.4, docs/home-chart.md).
 
 Authentication is replaced with test-double actors, as in `test_lc_api.py`.
-The window is the actor's term up to today, so these tests check the months
-they logged rather than the total number of points.
+The window is the actor's term up to today. Both are pinned (`FIXED_TODAY`,
+`TERM_START`/`TERM_END`), so the tests give the same result whatever the real date.
 """
 
 from collections.abc import Generator
@@ -14,12 +14,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentActor, get_current_actor, get_db
+from app.api.deps import CurrentActor, get_current_actor, get_db, get_today
 from app.main import app
 from app.models.attribute import Attribute
 from app.models.kpi import KpiSource
 from app.models.membership import Membership, TeamMember
-from app.models.org import LC, Function, Position, Term
+from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person
 from app.repositories.kpi import record_kpi, set_home_chart_default
 from tests.helpers import (
@@ -34,6 +34,13 @@ from tests.helpers import (
 )
 
 URL = "/api/v1/home/chart"
+
+# The endpoint plots the term "up to today", so every test runs on a fixed
+# today inside a fixed term. Without this, records logged on fixed dates
+# would drift out of the window and the tests would start failing a year on.
+FIXED_TODAY = date(2026, 9, 15)
+TERM_START = date(2026, 2, 1)
+TERM_END = date(2027, 1, 31)
 
 
 def _get_or_create_position(session: Session, *, key: str, rank: int) -> Position:
@@ -70,7 +77,7 @@ def _actor(person: Person, membership: Membership) -> CurrentActor:
 @pytest.fixture
 def home_api(db_session: Session) -> Generator[HomeApiFixture, None, None]:
     lc = make_lc(db_session, name="test-home-lc")
-    term = make_term(db_session, name="test-home-term")
+    term = make_term(db_session, name="test-home-term", start=TERM_START, end=TERM_END)
     function = make_function(db_session, key="test_home_fn", label="Test Home Fn")
     other_function = make_function(db_session, key="test_home_other", label="Test Home Other")
     team = make_team(db_session, lc=lc, function=function, term=term, name="Test Home Team")
@@ -97,6 +104,7 @@ def home_api(db_session: Session) -> Generator[HomeApiFixture, None, None]:
     set_home_chart_default(db_session, function_id=function.id, attribute=default_kpi)
 
     app.dependency_overrides[get_db] = lambda: db_session
+    app.dependency_overrides[get_today] = lambda: FIXED_TODAY
     _act_as(_actor(person, member))
 
     with TestClient(app) as client:
@@ -180,6 +188,25 @@ def test_picking_another_functions_kpi_is_rejected(home_api: HomeApiFixture) -> 
     assert response.status_code == 400
 
 
+@pytest.mark.parametrize(
+    "kpi_key",
+    ["test_home_others", "test_no_such_kpi", "test_home_inactive"],
+)
+def test_unpickable_kpis_all_get_the_same_400(
+    home_api: HomeApiFixture, db_session: Session, kpi_key: str
+) -> None:
+    """Another function's KPI, an unknown key and an inactive KPI must be
+    indistinguishable, so a viewer can't probe which KPI keys exist."""
+    inactive = make_kpi_attribute(db_session, key="test_home_inactive", label="Test Inactive")
+    inactive.active = False
+    db_session.flush()
+
+    response = home_api.client.get(URL, params={"kpi": kpi_key})
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == f"{kpi_key!r} is not a KPI you can chart"
+
+
 def test_no_records_means_no_points(home_api: HomeApiFixture) -> None:
     chart = home_api.client.get(URL).json()
 
@@ -204,3 +231,87 @@ def test_unallocated_person_is_forbidden(home_api: HomeApiFixture, db_session: S
     _act_as(CurrentActor(person=person, active_memberships=[], acting_membership=None))
 
     assert home_api.client.get(URL).status_code == 403
+
+
+def test_mc_sees_every_lc(home_api: HomeApiFixture, db_session: Session) -> None:
+    mc_lc = make_lc(db_session, name="test-home-mc", lc_type=LCType.MC)
+    other_lc = make_lc(db_session, name="test-home-other-lc")
+
+    person = make_person(db_session, email="test-home-mcvp@aiesec.net")
+    mcvp = make_membership(
+        db_session,
+        person=person,
+        lc=mc_lc,
+        position=_get_or_create_position(db_session, key="mcvp", rank=5),
+        term=home_api.term,
+        function=home_api.function,
+    )
+    elsewhere_person = make_person(db_session, email="test-home-elsewhere@aiesec.net")
+    elsewhere = make_membership(
+        db_session,
+        person=elsewhere_person,
+        lc=other_lc,
+        position=_get_or_create_position(db_session, key="member", rank=1),
+        term=home_api.term,
+        function=home_api.function,
+    )
+    _log(db_session, home_api.member, home_api.default_kpi, 4, date(2026, 6, 10))
+    _log(db_session, elsewhere, home_api.default_kpi, 6, date(2026, 6, 12))  # another LC
+    _act_as(_actor(person, mcvp))
+
+    chart = home_api.client.get(URL).json()
+
+    assert chart["scope"] == "all"
+    assert chart["title"] == "Test Default, All LCs"
+    assert {p["month"]: p["value"] for p in chart["points"]}["2026-06"] == 10
+
+
+def test_member_with_no_team_sees_nothing_not_everything(
+    home_api: HomeApiFixture, db_session: Session
+) -> None:
+    person = make_person(db_session, email="test-home-teamless@aiesec.net")
+    teamless = make_membership(
+        db_session,
+        person=person,
+        lc=home_api.lc,
+        position=_get_or_create_position(db_session, key="member", rank=1),
+        term=home_api.term,
+        function=home_api.function,
+    )
+    # A teammate-to-be has data; a member on no team must still see none of it.
+    _log(db_session, home_api.member, home_api.default_kpi, 4, date(2026, 6, 10))
+    _act_as(_actor(person, teamless))
+
+    chart = home_api.client.get(URL).json()
+
+    assert chart["scope"] == "team"
+    assert chart["title"] == "Test Default, your team"
+    assert chart["points"] == []
+
+
+def test_term_not_started_yet_has_no_points(home_api: HomeApiFixture, db_session: Session) -> None:
+    person = make_person(db_session, email="test-home-future@aiesec.net")
+    # Starts after FIXED_TODAY, so there is nothing to plot yet.
+    future_term = make_term(
+        db_session,
+        name="test-home-future-term",
+        start=date(2026, 10, 1),
+        end=date(2027, 3, 31),
+    )
+    # LCVP (function scope) rather than a member, so a missing team can't be
+    # the reason the chart is empty: only the date decides.
+    membership = make_membership(
+        db_session,
+        person=person,
+        lc=home_api.lc,
+        position=_get_or_create_position(db_session, key="lcvp", rank=3),
+        term=future_term,
+        function=home_api.function,
+    )
+    _log(db_session, membership, home_api.default_kpi, 3, date(2026, 10, 5))
+    _act_as(_actor(person, membership))
+
+    response = home_api.client.get(URL)
+
+    assert response.status_code == 200
+    assert response.json()["points"] == []

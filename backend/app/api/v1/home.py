@@ -12,7 +12,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentActor, get_current_actor, get_db
+from app.api.deps import CurrentActor, get_current_actor, get_db, get_today
 from app.core.permissions import HomeChartScope, home_chart_scope
 from app.models.attribute import Attribute
 from app.models.membership import Team
@@ -52,6 +52,7 @@ def get_home_chart(
     kpi: str | None = Query(default=None, description="KPI key; omit for the function default"),
     actor: CurrentActor = Depends(get_current_actor),
     db: Session = Depends(get_db),
+    today: date = Depends(get_today),
 ) -> HomeChart:
     """The homepage chart for the signed-in person (getHomeChart)."""
     acting = actor.acting_membership
@@ -66,16 +67,18 @@ def get_home_chart(
     try:
         attribute = resolve_home_chart_kpi(db, function_id=acting.function_id, kpi_key=kpi)
     except AttributeValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     where = _scope_label(db, scope, context.team_id, acting.function_id)
     title = f"{attribute.label if attribute else 'Monthly activity'}, {where}"
 
     points: list[HomeChartPoint] = []
     term = db.get(Term, acting.term_id)
-    if attribute is not None and term is not None:
-        # The current term, up to today: no point plotting months that haven't happened.
-        start, end = term.start_date, min(term.end_date, date.today())
+    # The current term, up to today: no point plotting months that haven't happened.
+    # If the term hasn't started yet (start after today) there is nothing to plot.
+    term_started = term is not None and term.start_date <= today
+    if attribute is not None and term is not None and term_started:
+        start, end = term.start_date, min(term.end_date, today)
         totals = monthly_totals(
             db,
             attribute_id=attribute.id,

@@ -37,6 +37,12 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def get_today() -> date:
+    """Today's date, as a dependency so tests can fix the date
+    (`app.dependency_overrides[get_today] = lambda: date(...)`)."""
+    return date.today()
+
+
 @dataclass(frozen=True)
 class CurrentActor:
     person: Person

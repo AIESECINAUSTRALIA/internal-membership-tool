@@ -49,6 +49,9 @@ from tests.helpers import (
         ("mcd", "all"),
         ("mcvp", "all"),
         ("mcp", "all"),
+        # Positions the rule doesn't know get the narrowest scope, never a wider one.
+        ("admin", "team"),
+        ("some_future_position", "team"),
     ],
 )
 def test_home_chart_scope_follows_position(position_key: str, expected: str) -> None:
@@ -136,14 +139,14 @@ def test_picking_another_functions_kpi_is_rejected(db_session: Session) -> None:
     other = make_function(db_session, key="test_other", label="Test Other")
     make_kpi_attribute(db_session, key="test_others", function=other)
 
-    with pytest.raises(AttributeValidationError, match="different function"):
+    with pytest.raises(AttributeValidationError, match="not a KPI you can chart"):
         resolve_home_chart_kpi(db_session, function_id=function.id, kpi_key="test_others")
 
 
 def test_picking_an_unknown_kpi_is_rejected(db_session: Session) -> None:
     function = make_function(db_session)
 
-    with pytest.raises(AttributeValidationError, match="Unknown KPI"):
+    with pytest.raises(AttributeValidationError, match="not a KPI you can chart"):
         resolve_home_chart_kpi(db_session, function_id=function.id, kpi_key="test_no_such_kpi")
 
 

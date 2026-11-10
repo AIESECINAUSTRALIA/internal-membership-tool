@@ -211,10 +211,19 @@ def resolve_home_chart_kpi(
             return None
         return attribute
 
+    # One message for every reason a pick is refused (unknown, inactive, not a
+    # KPI, another function's). Separate messages would let a viewer find out
+    # which KPI keys exist in other functions by trying keys. Admins still get
+    # the detailed reasons through `set_home_chart_default`.
+    refused = f"{kpi_key!r} is not a KPI you can chart"
+
     picked = session.execute(select(Attribute).where(Attribute.key == kpi_key)).scalar_one_or_none()
     if picked is None:
-        raise AttributeValidationError(f"Unknown KPI {kpi_key!r}")
-    check_kpi_for_function(picked, function_id)
+        raise AttributeValidationError(refused)
+    try:
+        check_kpi_for_function(picked, function_id)
+    except AttributeValidationError as exc:
+        raise AttributeValidationError(refused) from exc
     return picked
 
 

@@ -36,6 +36,8 @@ MC_POSITIONS: set[str] = {"mcd", "mcvp", "mcp"}
 ADMIN_POSITIONS: set[str] = {"admin"}
 PRESIDENTIAL_POSITIONS: set[str] = {"lcp", "mcp"}
 TEAM_HOLDING_POSITIONS: set[str] = {"member", "team_leader"}
+# Positions whose homepage chart covers their whole function in their LC.
+FUNCTION_SCOPE_POSITIONS: set[str] = {"lcvp", "lcp"}
 
 
 def position_level(position_key: str) -> Literal["lc", "mc"]:
@@ -52,15 +54,18 @@ HomeChartScope = Literal["team", "function", "all"]
 def home_chart_scope(position_key: str) -> HomeChartScope:
     """Whose data the homepage chart covers (Spec §2A.4, docs/home-chart.md):
     Member and TL see their team, LCVP and LCP their function in their LC, MC
-    positions all LCs. Mirrors `homeChartScope` in the frontend seed.
+    positions all LCs. Any other position (e.g. `admin`, or one added later)
+    gets `team`. Mirrors `homeChartScope` in the frontend seed.
 
     Fallback until ticket 2 adds position columns, same pattern as `POSITION_RANKS`.
     """
     if position_key in MC_POSITIONS:
         return "all"
-    if position_key in TEAM_HOLDING_POSITIONS:
-        return "team"
-    return "function"
+    if position_key in FUNCTION_SCOPE_POSITIONS:
+        return "function"
+    # Deliberately the narrowest scope: a position this rule doesn't know
+    # about should see less data, never more.
+    return "team"
 
 
 def scope_rank(scope: Scope) -> int:
