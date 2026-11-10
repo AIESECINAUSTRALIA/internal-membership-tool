@@ -16,7 +16,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `membership.py` | `membership`, `team`, `team_member` |
 | `privacy.py` | `audit_log` (later also `deletion_request`) |
 | `attribute.py` | `attribute`, `attribute_value` |
-| `kpi.py` | `kpi_record` |
+| `kpi.py` | `kpi_record`, `home_chart_default` |
 
 This grouping isn't enforced by anything — it's a convention matching the
 spec's own section breakdown (org-structural lookups vs. the person record
@@ -348,6 +348,33 @@ date-range rollup of one KPI scoped to a member, and `membership(lc_id, function
 start_date, end_date)` for resolving a scope's active memberships — both added in the
 `kpi_record` migration, since `kpi_record` is what starts actually querying
 `membership` that way.
+
+## `home_chart_default`
+
+Added in migration `f006558c355d`. Which KPI the homepage chart plots for a function
+when the viewer doesn't pick one (spec §2A.4). The product decision behind it is in
+`docs/home-chart.md`.
+
+| Column | Purpose |
+|---|---|
+| `function_id` | PK, → `function`. The PK *is* the function, so the database itself allows at most one default per function |
+| `attribute_id` | → `attribute`: the default KPI |
+
+A function with no row has no default: the chart shows "No data exists" until the
+viewer picks a KPI.
+
+**Why a separate table, not `function.default_kpi_id`.** `attribute.function_id`
+already points at `function`. A column pointing back would make the two tables
+reference each other, which needs `use_alter` in SQLAlchemy and a three-step seed
+order. A lookup table keeps every FK one-way, and can grow (e.g. a different default
+per position level) without touching `function`.
+
+**What the FK can't check.** The attribute must be an active KPI that is this
+function's own or shared (`function_id` NULL).
+`app/repositories/kpi.py::set_home_chart_default` checks that and is the only write
+path. If a KPI is deactivated or moved to another function *after* being set as a
+default, the row is left alone, and `resolve_home_chart_kpi` treats it as "no default"
+rather than an error.
 
 ## Foreign keys and what deleting protects against
 

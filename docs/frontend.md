@@ -136,7 +136,8 @@ These are in the mock and the frontend, but **not in the spec or schema yet**:
   function, and nobody else does (spec §2 says "for LCP and MCP").
 - **`Position.homeChartScope`**: which default chart the homepage shows. Member and Team
   Leader see a team chart, LCVP and LCP a function chart (as requested). MC positions see
-  all of Australia, which is a guess (spec §12 #12).
+  all of Australia, which is a guess (spec §12 #12). Any other position gets the team
+  chart, the narrowest scope (backend `home_chart_scope`).
 - **The permission matrix** in `api/mock/seed.ts` is illustrative. The real seed is a spec
   TODO (§3.3). In particular the mock lets Team Leaders extend terms but not move people,
   and gives LCVPs `edit` at `function` scope but `create` at `lc` scope.
