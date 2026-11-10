@@ -126,6 +126,12 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
 for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
 
+# Team management (spec §1.5, §2A.2): LCP can manage teams within their own LC;
+# MC and admin can manage teams across all LCs.
+BASELINE_PERMISSION_MATRIX.append(MatrixGrant("lcp", "team", "manage", "lc"))
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "team", "manage", "all"))
+
 
 @dataclass(frozen=True)
 class MembershipContext:
@@ -246,6 +252,25 @@ def can_act_on_target(
 
     # Check 2: Rank hierarchy (strictly below)
     return target.position_rank < acting.position_rank
+
+
+def can_manage_team(
+    actor_memberships: Sequence[MembershipContext], target_lc_id: int
+) -> bool:
+    """Create, rename, disband, move members in, or re-parent a team (spec §1.5).
+
+    LCP can manage teams within their own LC; MC/admin have all-scope access.
+    There is no target person, so the hierarchy check does not apply.
+    """
+    scope = resolve_widest_scope(actor_memberships, "team", "manage")
+    if scope is None:
+        return False
+    return scope_covers(
+        scope=scope,
+        actor_memberships=actor_memberships,
+        target_person_id=-1,
+        target_lc_id=target_lc_id,
+    )
 
 
 def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:

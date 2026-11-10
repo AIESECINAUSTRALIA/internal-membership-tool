@@ -48,6 +48,7 @@ class Team(Base):
     leader_membership_id: Mapped[int | None] = mapped_column(
         ForeignKey("membership.id"), nullable=True
     )
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
 class TeamMember(Base):

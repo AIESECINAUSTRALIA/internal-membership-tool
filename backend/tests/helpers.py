@@ -127,7 +127,7 @@ def make_team(
     term: Term,
     name: str = "Test Team",
 ) -> Team:
-    team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name=name)
+    team = Team(lc_id=lc.id, function_id=function.id, term_id=term.id, name=name, active=True)
     session.add(team)
     session.flush()
     return team
