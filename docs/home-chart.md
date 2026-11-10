@@ -86,5 +86,6 @@ Record the answers here, then change the status line at the top.
   have no default yet.
 - **Admin UI to set defaults.** Belongs on the Admin console's KPIs screen; until
   then, defaults are set through `set_home_chart_default` (seed or shell).
-- **Frontend.** `HomePage.tsx` doesn't render the line or a KPI picker yet, and the
-  app still runs on the mock `Api`.
+- **Frontend.** `HomePage.tsx` doesn't render the line or a KPI picker yet, and
+  `getHomeChart` isn't in `http/httpApi.ts` yet, so even in HTTP mode it falls back to
+  the mock.
