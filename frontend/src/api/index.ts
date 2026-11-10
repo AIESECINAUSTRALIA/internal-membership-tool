@@ -2,29 +2,26 @@
  * THE ONE PLACE the app chooses its data source.
  *
  * VITE_AUTH_MODE picks how people sign in (see docs/auth.md and `authMode.ts`):
- * - `mock`: the development sign-in button and personas below.
- *   The default for the dev server and tests only.
+ * - `mock`: the development sign-in button and personas below. Everything comes from
+ *   the in-browser mock; the backend is never called. The default for the dev server
+ *   and tests only.
  * - `supabase`: real "Sign in with Google" (aiesec.net), checked by the backend's
- *   `GET /api/v1/me`. The default for production builds.
+ *   `GET /api/v1/me`. The default for production builds. The membership-summary
+ *   methods (listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam) and
+ *   the LCs/terms/teams in getReferenceData come from the real backend
+ *   (`http/httpApi.ts`, ticket DEV-0043, spec §2A.5), sent with the Supabase access
+ *   token. Everything else still comes from the mock until its endpoints exist.
  *
  * The mock never grants real access: it lives only in the browser, and the backend
  * only trusts Supabase-signed tokens.
- *
- * Data: membership-summary methods (listMembers, addMember, getMembershipDetail,
- * extendTerm, moveToTeam) call the real FastAPI backend through `createHttpApi`
- * (Ticket DEV-0043, Spec §2A.5). Everything else still goes through the mock until
- * the corresponding backend tickets land.
- *
- * AUTH stub: `httpApi` still sends `X-Actor-Email`, read from `actorEmailRef`
- * (updated by `AppProviders` once `getMe()` resolves). The backend now only accepts
- * a Supabase bearer token, so `headers()` in `http/httpApi.ts` must switch to that.
  */
 import { createSupabaseClient } from '../auth/supabaseClient'
 import { pickAuthMode, type AuthMode } from './authMode'
-import type { Api } from './types'
 import { createHttpApi } from './http/httpApi'
+import { createMockApi } from './mock/mockApi'
 import { PERSONAS, type PersonaKey } from './mock/seed'
-import { withSupabaseSession } from './supabaseSession'
+import { bearerFrom, withSupabaseSession } from './supabaseSession'
+import type { Api } from './types'
 
 export const authMode: AuthMode = pickAuthMode(import.meta.env)
 
@@ -34,25 +31,28 @@ function personaFromUrl(): PersonaKey | undefined {
   return requested && requested in PERSONAS ? (requested as PersonaKey) : undefined
 }
 
-/**
- * Mutable ref updated by `AppProviders` after auth resolves.
- * The httpApi reads this on every request, so it always uses the latest email.
- */
-export const actorEmailRef: { current: string | null } = { current: null }
-
 function createApi(): Api {
   if (authMode === 'supabase') {
-    const httpApi = createHttpApi({ getActorEmail: () => actorEmailRef.current })
+    const { auth } = createSupabaseClient()
+    // '' = same origin. Locally, VITE_API_URL points at the backend container.
+    const apiUrl = import.meta.env.VITE_API_URL ?? ''
+    const mock = createMockApi()
+    const httpApi = createHttpApi({
+      getAuthHeaders: bearerFrom(auth),
+      baseUrl: apiUrl,
+      fallback: mock,
+    })
     return withSupabaseSession(httpApi, {
-      auth: createSupabaseClient().auth,
-      apiUrl: import.meta.env.VITE_API_URL ?? 'http://localhost:8000',
+      auth,
+      apiUrl,
       hostedDomain: import.meta.env.VITE_GOOGLE_HOSTED_DOMAIN || undefined,
+      // Positions still come from the mock. Taking them straight from it keeps
+      // sign-in to one backend call (/me): a failing reference endpoint can't
+      // lock anyone out.
+      getPositions: async () => (await mock.getReferenceData()).positions,
     })
   }
-  return createHttpApi({
-    getActorEmail: () => actorEmailRef.current,
-    mockOptions: { persona: personaFromUrl() },
-  })
+  return createMockApi({ persona: personaFromUrl() })
 }
 
 export const api: Api = createApi()

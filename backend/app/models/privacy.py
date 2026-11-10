@@ -15,7 +15,6 @@ from typing import Any
 from sqlalchemy import BigInteger, DateTime, Integer, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
-from sqlalchemy.types import JSON
 
 from app.db.base import Base
 
@@ -26,11 +25,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     # BigInteger: a log only ever grows, and ids are never reused.
-    id: Mapped[int] = mapped_column(
-        BigInteger().with_variant(Integer, "sqlite"),
-        primary_key=True,
-        autoincrement=True,
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     # The two actor columns deliberately have **no foreign keys**. Spec §8.3:
     # when a person is hard-deleted, the log is retained and these become
     # dangling ids by design. An FK would either block that delete or — with
@@ -45,9 +40,7 @@ class AuditLog(Base):
     resource_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     summary: Mapped[str] = mapped_column(String)
     # Before/after for config-type changes. Must never contain personal data.
-    diff: Mapped[dict[str, Any] | None] = mapped_column(
-        JSONB().with_variant(JSON(), "sqlite"), nullable=True
-    )
+    diff: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Indexed for the Admin console's date-range filter (spec §2A.10).
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True

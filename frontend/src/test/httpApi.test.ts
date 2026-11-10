@@ -8,10 +8,14 @@
  * What these tests cover:
  *   - Each of the five membership-summary methods sends the right request.
  *   - Backend returns `{rows, total}` matching frontend Page type.
- *   - String→integer coercions for lcId, teamId, termId, membershipId.
- *   - The `X-Actor-Email` header is included when the actor email is set.
+ *   - Numeric-string ids (lcId, teamId, termId) become integers; any other id is
+ *     refused without calling the backend.
+ *   - getReferenceData: LCs/terms/teams from the backend, positions/functions from
+ *     the fallback.
+ *   - The auth headers from `getAuthHeaders()` go on every request.
  *   - All four `AddMemberResult` statuses are returned correctly.
- *   - HTTP error responses throw with a useful message.
+ *   - Read methods throw on an HTTP error; write methods (addMember, extendTerm,
+ *     moveToTeam) never throw — failures come back as a plain-English rejection.
  *
  * What these tests do NOT cover (tested by the backend's own pytest suite):
  *   - The permission / hierarchy / LC-isolation logic (that's server-side).
@@ -20,21 +24,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createHttpApi } from '../api/http/httpApi'
+import { createMockApi } from '../api/mock/mockApi'
 import type { MemberQuery } from '../api/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const ACTOR_EMAIL = 'lcvp@aiesec.example'
 const BASE = 'http://localhost:8000'
+const AUTH = { Authorization: 'Bearer test-token' }
 
-function makeApi(email: string | null = ACTOR_EMAIL) {
+function makeApi() {
   return createHttpApi({
-    getActorEmail: () => email,
-    // Use zero-latency mock for the delegated methods (getMe, getReferenceData…)
-    mockOptions: { latencyMs: 0 },
+    getAuthHeaders: async () => AUTH,
+    baseUrl: BASE,
+    // Zero-latency mock for the methods that aren't real yet (getMe, signIn, …).
+    fallback: createMockApi({ latencyMs: 0 }),
   })
+}
+
+function headersOf(spy: ReturnType<typeof vi.spyOn>, call = 0): Record<string, string> {
+  return (spy.mock.calls[call][1] as RequestInit).headers as Record<string, string>
 }
 
 /** A stub fetch response. */
@@ -90,18 +100,29 @@ describe('listMembers', () => {
     })
   })
 
-  it('sends the actor email as X-Actor-Email', async () => {
+  it('sends the auth headers on every request', async () => {
     fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
-    await makeApi(ACTOR_EMAIL).listMembers(ALL)
-    const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>
-    expect(headers['X-Actor-Email']).toBe(ACTOR_EMAIL)
+    await makeApi().listMembers(ALL)
+    expect(headersOf(fetchSpy)).toMatchObject(AUTH)
+    expect(headersOf(fetchSpy)['X-Actor-Email']).toBeUndefined()
   })
 
-  it('omits X-Actor-Email when actor email is null', async () => {
+  it('asks for fresh auth headers on each call', async () => {
+    // A token can be refreshed between calls, so it must never be cached.
+    fetchSpy.mockImplementation(() => okResponse({ rows: [], total: 0 }))
+    const getAuthHeaders = vi.fn(async () => ({}))
+    const api = createHttpApi({ getAuthHeaders, baseUrl: BASE, fallback: createMockApi({ latencyMs: 0 }) })
+    await api.listMembers(ALL)
+    await api.listMembers(ALL)
+    expect(getAuthHeaders).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses a relative URL when baseUrl is empty', async () => {
+    // '' = same origin: Firebase Hosting forwards /api/** to the backend.
     fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
-    await makeApi(null).listMembers(ALL)
-    const headers = (fetchSpy.mock.calls[0][1] as RequestInit).headers as Record<string, string>
-    expect(headers['X-Actor-Email']).toBeUndefined()
+    const api = createHttpApi({ getAuthHeaders: async () => ({}), baseUrl: '', fallback: createMockApi({ latencyMs: 0 }) })
+    await api.listMembers(ALL)
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/members/summary')
   })
 
   it('returns backend rows and total', async () => {
@@ -142,13 +163,51 @@ describe('listMembers', () => {
 describe('addMember', () => {
   const base = {
     email: 'new@aiesec.example',
-    lcId: 'lc-usyd',
+    lcId: '3',
     positionKey: 'member',
     functionKey: 'ogv',
-    teamId: 'team-usyd-ogv-a',
+    teamId: '12',
+    termId: '7',
     startDate: '2026-01-01',
     endDate: '2026-12-31',
   }
+
+  it('sends numeric-string ids as integers', async () => {
+    fetchSpy.mockReturnValueOnce(okResponse({ status: 'created' }))
+    await makeApi().addMember(base)
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
+    expect(body).toMatchObject({ lcId: 3, teamId: 12, termId: 7 })
+  })
+
+  it('rejects a non-numeric lcId without calling the backend', async () => {
+    const result = await makeApi().addMember({ ...base, lcId: 'lc-usyd' })
+    expect(result).toEqual({ status: 'rejected', message: 'The form is out of date. Close it and try again.' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-numeric teamId or termId without calling the backend', async () => {
+    const stale = { status: 'rejected', message: 'The form is out of date. Close it and try again.' }
+    expect(await makeApi().addMember({ ...base, teamId: 'team-usyd-ogv-a' })).toEqual(stale)
+    expect(await makeApi().addMember({ ...base, termId: 'term-1' })).toEqual(stale)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('sends teamId/termId/membershipId as null when not chosen', async () => {
+    fetchSpy.mockReturnValueOnce(okResponse({ status: 'created' }))
+    await makeApi().addMember({ ...base, teamId: undefined, termId: undefined })
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.teamId).toBeNull()
+    expect(body.termId).toBeNull()
+    expect(body.membershipId).toBeNull()
+  })
+
+  it("sends the actor's acting membershipId as an integer", async () => {
+    // membershipId = which of the ACTOR's own memberships the add is made under.
+    fetchSpy.mockReturnValueOnce(okResponse({ status: 'created' }))
+    await makeApi().addMember({ ...base, membershipId: '5' })
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.membershipId).toBe(5)
+  })
 
   it('POSTs to /api/v1/members', async () => {
     fetchSpy.mockReturnValueOnce(okResponse({ status: 'created' }))
@@ -219,6 +278,12 @@ describe('getMembershipDetail', () => {
     expect(init.method).toBe('GET')
   })
 
+  it('encodes the membership id in the path', async () => {
+    fetchSpy.mockReturnValueOnce(okResponse(detail))
+    await makeApi().getMembershipDetail('a/b')
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/members/a%2Fb`)
+  })
+
   it('returns the detail payload', async () => {
     fetchSpy.mockReturnValueOnce(okResponse(detail))
     const result = await makeApi().getMembershipDetail('42')
@@ -273,12 +338,82 @@ describe('moveToTeam', () => {
     expect(await makeApi().moveToTeam('7', '99')).toEqual({ status: 'ok' })
   })
 
+  it('rejects a non-numeric teamId without calling the backend', async () => {
+    expect(await makeApi().moveToTeam('7', 'team-usyd-ogv-a')).toEqual({
+      status: 'rejected',
+      message: 'The form is out of date. Close it and try again.',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('returns {status: rejected}', async () => {
     fetchSpy.mockReturnValueOnce(okResponse({ status: 'rejected', message: 'Wrong LC.' }))
     expect(await makeApi().moveToTeam('7', '99')).toEqual({
       status: 'rejected',
       message: 'Wrong LC.',
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Write methods: failures become rejections, never exceptions
+// ---------------------------------------------------------------------------
+
+describe('write failures', () => {
+  it.each([
+    [401, 'Your session has expired. Sign in again.'],
+    [403, "You don't have permission to do that."],
+    [404, 'That membership no longer exists. Refresh the page.'],
+    [500, 'Something went wrong. Try again.'],
+  ])('maps %i on extendTerm to a rejection', async (status, message) => {
+    fetchSpy.mockReturnValueOnce(errorResponse(status, 'x'))
+    expect(await makeApi().extendTerm('5', '2027-01-01')).toEqual({ status: 'rejected', message })
+  })
+
+  it('maps a network error on moveToTeam to a rejection', async () => {
+    fetchSpy.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    expect(await makeApi().moveToTeam('5', '12')).toEqual({
+      status: 'rejected',
+      message: 'Something went wrong. Try again.',
+    })
+  })
+
+  it('maps 401 on addMember to a session-expired rejection', async () => {
+    fetchSpy.mockReturnValueOnce(errorResponse(401, 'x'))
+    const input = {
+      email: 'a@aiesec.net',
+      lcId: '3',
+      positionKey: 'member',
+      functionKey: 'ogv',
+      startDate: '2026-01-01',
+      endDate: '2026-12-31',
+    }
+    expect(await makeApi().addMember(input)).toEqual({
+      status: 'rejected',
+      message: 'Your session has expired. Sign in again.',
+    })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getReferenceData
+// ---------------------------------------------------------------------------
+
+describe('getReferenceData', () => {
+  const LC_3 = { id: '3', name: 'USYD', type: 'lc', state: 'NSW', active: true }
+  const TERM_7 = { id: '7', name: '26.2', startDate: '2026-08-01', endDate: '2026-12-31' }
+  const TEAM_12 = { id: '12', name: 'oGV Team A', lcId: '3', functionKey: 'ogv', leader: null }
+
+  it('takes lcs/terms/teams from the backend and positions/functions from the fallback', async () => {
+    fetchSpy.mockReturnValueOnce(okResponse({ lcs: [LC_3], terms: [TERM_7], teams: [TEAM_12] }))
+    const ref = await makeApi().getReferenceData()
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/reference/membership-options`)
+    expect(headersOf(fetchSpy)).toMatchObject(AUTH)
+    expect(ref.lcs).toEqual([LC_3])
+    expect(ref.terms).toEqual([TERM_7])
+    expect(ref.teams).toEqual([TEAM_12])
+    expect(ref.positions.length).toBeGreaterThan(0)
+    expect(ref.functions.length).toBeGreaterThan(0)
   })
 })
 

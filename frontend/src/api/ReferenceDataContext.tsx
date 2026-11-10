@@ -33,9 +33,14 @@ export function ReferenceDataProvider({ children }: { children: ReactNode }) {
 
   const fetchNow = useCallback(() => {
     const id = ++requestId.current
-    api.getReferenceData().then((data) => {
-      if (id === requestId.current) setReference(data)
-    })
+    api.getReferenceData().then(
+      (data) => {
+        if (id === requestId.current) setReference(data)
+      },
+      // A failed load leaves `reference` as it was (null at first), which pages already
+      // treat as "not loaded yet". The next sign-in or invalidate() tries again.
+      () => {},
+    )
   }, [api])
 
   useEffect(() => {
