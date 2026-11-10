@@ -24,10 +24,10 @@ from app.models.attribute import (
 )
 from app.models.kpi import KpiRecord, KpiSource
 from app.models.membership import Membership
-from app.models.org import LC, LCType, Position
+from app.models.org import LC, Function, LCType, Position
 from app.models.privacy import AuditLog
 from app.repositories.attribute import set_attribute_value
-from app.repositories.kpi import record_kpi
+from app.repositories.kpi import record_kpi, set_home_chart_default
 from tests.helpers import (
     make_attribute,
     make_function,
@@ -527,3 +527,60 @@ def test_deactivating_keeps_existing_values(attr_api: AttributeApiFixture) -> No
     }
     assert rows[kpi.id]["in_use"] is True
     assert rows[field.id]["in_use"] is True
+
+
+# ---------------------------------------------------------------------------
+# Homepage defaults (home_chart_default, docs/home-chart.md)
+# ---------------------------------------------------------------------------
+
+
+def _default_kpi(fixture: AttributeApiFixture) -> tuple[Attribute, Function]:
+    """A KPI scoped to a function and set as that function's homepage default."""
+    function = make_function(fixture.session, key="test_default_fn", label="Test Default Fn")
+    kpi = make_kpi_attribute(fixture.session, key="test_default_kpi", function=function)
+    set_home_chart_default(fixture.session, function_id=function.id, attribute=kpi)
+    return kpi, function
+
+
+def test_retiring_a_homepage_default_kpi_is_refused(attr_api: AttributeApiFixture) -> None:
+    kpi, _ = _default_kpi(attr_api)
+
+    response = attr_api.client.patch(f"{URL}/{kpi.id}", json={"active": False})
+
+    # A 400 rolls the request back, so the KPI stays active. (The rollback also
+    # discards this test's own rows, so they can't be re-read here.)
+    assert response.status_code == 400
+    assert "Test Default Fn" in response.json()["detail"]
+
+
+def test_moving_a_default_kpi_to_another_function_is_refused(
+    attr_api: AttributeApiFixture,
+) -> None:
+    kpi, _ = _default_kpi(attr_api)
+    other = make_function(attr_api.session, key="test_other_fn", label="Test Other Fn")
+
+    response = attr_api.client.patch(f"{URL}/{kpi.id}", json={"function_id": other.id})
+
+    assert response.status_code == 400
+    assert "Test Default Fn" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("target", ["same", "shared"])
+def test_rescoping_a_default_kpi_that_keeps_it_valid_is_allowed(
+    attr_api: AttributeApiFixture, target: str
+) -> None:
+    """Same function, or shared by all functions: the default still works."""
+    kpi, function = _default_kpi(attr_api)
+    new_function_id = function.id if target == "same" else None
+
+    response = attr_api.client.patch(f"{URL}/{kpi.id}", json={"function_id": new_function_id})
+
+    assert response.status_code == 200, response.text
+
+
+def test_editing_a_default_kpis_label_is_allowed(attr_api: AttributeApiFixture) -> None:
+    kpi, _ = _default_kpi(attr_api)
+
+    response = attr_api.client.patch(f"{URL}/{kpi.id}", json={"label": "Renamed"})
+
+    assert response.status_code == 200, response.text

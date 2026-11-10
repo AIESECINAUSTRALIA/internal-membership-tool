@@ -337,6 +337,17 @@ new values: `validate_and_coerce` (shared by `set_attribute_value` and `record_k
 rejects writes to it. Reactivating undoes this. To change a locked `data_type`, retire
 the attribute and add a new one with a new `key`.
 
+A retired KPI takes no new `kpi_record` rows, **imports included**. To backfill history
+for one, reactivate it, import, then retire it again. Each step is audit-logged.
+
+A retired attribute's stored value can still be **cleared** (set to null), so deletion
+requests (spec §8) work on retired fields. `required` stops applying once retired.
+
+A KPI that is a function's **homepage default** (`home_chart_default`) can't be retired
+or moved to another function until that default is changed. Moving it to the same
+function or making it shared (`function_id` null) is fine, because the default still
+works (docs/home-chart.md).
+
 ## `kpi_record`
 
 KPIs are catalogued in `attribute` like any other volatile field (`applies_to =

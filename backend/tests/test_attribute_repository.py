@@ -238,3 +238,64 @@ def test_retired_attribute_rejects_new_values_but_keeps_old_ones(db_session: Ses
         entity_id=person.id,
     )
     assert stored == "kept"
+
+
+def test_retired_attribute_value_can_still_be_cleared(db_session: Session) -> None:
+    """A deletion request (spec §8) must be able to blank a retired field's value."""
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(db_session, key="test_retired_clearable")
+    set_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+        raw_value="personal",
+        recorded_by_membership_id=recorder_id,
+    )
+    attribute.active = False
+    db_session.flush()
+
+    set_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+        raw_value=None,
+        recorded_by_membership_id=recorder_id,
+    )
+
+    stored = get_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+    )
+    assert stored is None
+
+
+def test_retired_required_attribute_can_still_be_cleared(db_session: Session) -> None:
+    """`required` stops applying once retired: it takes no new values anyway."""
+    person, recorder_id = make_person_and_recorder(db_session)
+    attribute = make_attribute(
+        db_session, key="test_retired_required", validation={"required": True}
+    )
+    set_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+        raw_value="x",
+        recorded_by_membership_id=recorder_id,
+    )
+    attribute.active = False
+    db_session.flush()
+
+    # Must not raise "is required".
+    set_attribute_value(
+        db_session,
+        attribute=attribute,
+        entity_type=AttributeEntityType.PERSON,
+        entity_id=person.id,
+        raw_value=None,
+        recorded_by_membership_id=recorder_id,
+    )

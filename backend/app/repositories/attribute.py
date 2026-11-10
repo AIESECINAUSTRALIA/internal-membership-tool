@@ -33,7 +33,7 @@ from app.models.attribute import (
     AttributeEntityType,
     AttributeValue,
 )
-from app.models.kpi import KpiRecord
+from app.models.kpi import HomeChartDefault, KpiRecord
 from app.models.org import Function
 
 # The four typed columns on attribute_value, in data_type-independent order.
@@ -126,16 +126,22 @@ def validate_and_coerce(attribute: Attribute, raw_value: object) -> dict[str, ob
     value outside `enum_options`, a missing required value, an out-of-range
     number/date, a regex mismatch on text, or an attribute that has been retired
     (`active = false`): its old values stay, but it takes no new ones.
-    """
-    if not attribute.active:
-        raise AttributeValidationError(f"{attribute.key} is retired and takes no new values")
 
+    Clearing (`raw_value=None`) is allowed even on a retired attribute.
+    """
     rules = attribute.validation or {}
 
     if raw_value is None:
-        if rules.get("required"):
+        # Clearing is always allowed, even on a retired attribute: it's how a
+        # stored value is removed (e.g. a deletion request, spec §8). `required`
+        # only applies while the attribute is active: a retired one takes no
+        # new values anyway.
+        if rules.get("required") and attribute.active:
             raise AttributeValidationError(f"{attribute.key} is required")
         return dict.fromkeys(_VALUE_COLUMNS)
+
+    if not attribute.active:
+        raise AttributeValidationError(f"{attribute.key} is retired and takes no new values")
 
     columns = _type_check(attribute, raw_value)
     stored_value = next(value for value in columns.values() if value is not None)
@@ -438,6 +444,40 @@ def _require_safe_for_stored_values(
         raise AttributeValidationError(f"Still in use, can't remove: {', '.join(in_use)}")
 
 
+def _require_not_a_home_default(
+    session: Session,
+    attribute: Attribute,
+    *,
+    retiring: bool,
+    new_function_id: int | None,
+) -> None:
+    """Refuse a change that would break a function's homepage chart default.
+
+    `home_chart_default` can't express "must stay usable" as a FK, so the catalog
+    guards it here (docs/home-chart.md). A default for function F stays usable
+    while the KPI is active and is F's own or shared (`function_id` NULL), so:
+    - retiring the KPI breaks every default that points at it;
+    - moving it to another function breaks the defaults of every other function.
+    The admin changes the default first, then retries.
+    """
+    rows = session.execute(
+        select(HomeChartDefault.function_id, Function.label)
+        .join(Function, Function.id == HomeChartDefault.function_id)
+        .where(HomeChartDefault.attribute_id == attribute.id)
+        .order_by(Function.label)
+    ).all()
+
+    broken = [
+        label
+        for function_id, label in rows
+        if retiring or (new_function_id is not None and new_function_id != function_id)
+    ]
+    if broken:
+        raise AttributeValidationError(
+            f"This KPI is the homepage default for {', '.join(broken)}. Change that default first."
+        )
+
+
 def update_attribute(
     session: Session,
     *,
@@ -472,6 +512,7 @@ def update_attribute(
     )
     if function_id != attribute.function_id:
         _require_known_function(session, function_id)
+        _require_not_a_home_default(session, attribute, retiring=False, new_function_id=function_id)
     _require_safe_for_stored_values(
         session,
         attribute=attribute,
@@ -519,6 +560,8 @@ def _set_active(
         raise AttributeValidationError(f"Attribute {attribute_id} not found")
     if attribute.active == active:
         return attribute
+    if not active:
+        _require_not_a_home_default(session, attribute, retiring=True, new_function_id=None)
 
     attribute.active = active
     session.flush()

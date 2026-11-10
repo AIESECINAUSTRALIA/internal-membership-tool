@@ -180,6 +180,34 @@ def test_record_kpi_rejects_value_below_minimum(db_session: Session) -> None:
         )
 
 
+def test_record_kpi_rejects_a_missing_value_on_a_retired_kpi(db_session: Session) -> None:
+    """Clearing is allowed for attribute_value, but a kpi_record always needs a
+    number: a blank value must be a clean validation error, never a DB error."""
+    lc = make_lc(db_session)
+    term = make_term(db_session)
+    position = make_position(db_session)
+    function = make_function(db_session)
+    person = make_person(db_session)
+    membership = make_membership(
+        db_session, person=person, lc=lc, position=position, term=term, function=function
+    )
+    attribute = make_kpi_attribute(db_session)
+    attribute.active = False
+    db_session.flush()
+
+    with pytest.raises(AttributeValidationError):
+        record_kpi(
+            db_session,
+            attribute=attribute,
+            membership_id=membership.id,
+            value_number=None,  # type: ignore[arg-type]  # e.g. a blank import cell
+            period_start=date(2026, 6, 1),
+            period_end=date(2026, 6, 30),
+            source=KpiSource.IMPORT,
+            recorded_by_membership_id=membership.id,
+        )
+
+
 def test_sum_by_function_returns_correct_totals_within_range(db_session: Session) -> None:
     lc = make_lc(db_session)
     term = make_term(db_session)
