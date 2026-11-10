@@ -4,7 +4,16 @@
  */
 import dayjs from 'dayjs'
 
-import type { FunctionRef, IsoDate, MembershipView, Position, Scope, Team } from '../api/types'
+import type {
+  AttributeAppliesTo,
+  AttributeDataType,
+  FunctionRef,
+  IsoDate,
+  MembershipView,
+  Position,
+  Scope,
+  Team,
+} from '../api/types'
 
 /** "Team Leader (TL)" -> "TL". "Member" -> "Member". Uses the bracketed short name if any. */
 export function shortLabel(label: string): string {
@@ -46,6 +55,22 @@ export const SCOPE_LABELS: Record<Scope, string> = {
   function: 'Your function',
   lc: 'Your LC',
   all: 'All LCs',
+}
+
+/** What an attribute catalog row describes, for the Metrics & custom fields screen (§4.2). */
+export const APPLIES_TO_LABELS: Record<AttributeAppliesTo, string> = {
+  kpi: 'KPI (metric)',
+  person: 'Person',
+  membership: 'Membership',
+}
+
+/** Plain-English data types for the same screen. */
+export const DATA_TYPE_LABELS: Record<AttributeDataType, string> = {
+  text: 'Text',
+  number: 'Number',
+  date: 'Date',
+  boolean: 'Yes / no',
+  enum: 'Choice from a list',
 }
 
 /** "member_record" -> "Member record", "kpi_record" -> "KPI record". */

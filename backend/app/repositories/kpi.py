@@ -76,6 +76,11 @@ def record_kpi(
             f"{attribute.key}: KPI attributes must have data_type 'number', "
             f"not {attribute.data_type.value!r}"
         )
+    # A kpi_record always holds a number. `validate_and_coerce` lets None through
+    # (clearing an attribute_value is allowed, even on a retired attribute), so a
+    # blank value is refused here rather than failing on the NOT NULL column.
+    if value_number is None:
+        raise AttributeValidationError(f"{attribute.key}: a KPI record needs a value")
     # Shared with attribute_value writes; the returned column mapping isn't
     # needed here, only the type check and min/max rules (raises on failure).
     validate_and_coerce(attribute, value_number)

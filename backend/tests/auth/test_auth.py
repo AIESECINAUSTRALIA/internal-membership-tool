@@ -217,6 +217,20 @@ def test_me_is_503_when_supabase_url_is_not_configured(db_session: Session) -> N
     assert response.status_code == 503
 
 
+def test_me_without_token_is_401_even_when_supabase_url_is_not_configured(
+    db_session: Session,
+) -> None:
+    """No token is "not signed in" (401) whatever the config. A token with no
+    config is still 503 (the test above): nobody is ever let in."""
+    app.dependency_overrides[get_settings] = lambda: Settings(supabase_url="")
+    try:
+        response = TestClient(app).get("/api/v1/me")
+    finally:
+        app.dependency_overrides.clear()
+
+    assert response.status_code == 401
+
+
 # --- Unit tests -----------------------------------------------------------
 
 

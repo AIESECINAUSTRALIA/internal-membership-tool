@@ -307,6 +307,47 @@ needing a migration every time a new field or metric appears — acceptable beca
 or `kpi_record`, and because the single write path keeps the missing guarantees to a
 short, testable list rather than scattering `INSERT`s across the codebase.
 
+### Editing the catalog
+
+Admins add, edit and retire KPIs and custom fields in the Admin console's
+**Metrics & custom fields** screen (spec §1.5), backed by `GET/POST/PATCH
+/api/v1/attributes` (`app/api/v1/attributes.py`). Every call needs `manage` on
+`attribute`, which `app/core/permissions.py` grants to the MC and admin positions
+at `all` scope (so at least two people always hold it). Every create, edit,
+deactivate and reactivate writes an `attribute.*` audit entry with a before/after
+diff of the changed fields; an edit that changes nothing writes nothing.
+
+Because stored values depend on the catalog row, an edit can't change everything.
+The rules live in `app/repositories/attribute.py` (`create_attribute`,
+`update_attribute`, `deactivate_attribute`):
+
+| Field | Rule | Why |
+|---|---|---|
+| `key` | Set once, lowercase `a-z 0-9 _`, unique. | Code and reports refer to it. |
+| `applies_to` | Set once. | It decides which table holds the values. |
+| `data_type` | Locked once any `attribute_value` or `kpi_record` references the row. A KPI must be `number`. | Values sit in the typed column `data_type` picks; `kpi_record` only has `value_number`. |
+| `enum_options` | Options can be added; one still held by a stored value can't be removed. | A stored choice would point at nothing. |
+| `validation` | Checked on save: only the rules that fit the data type (`required` always, `min`/`max` on number and date, `regex` on text), `min <= max`, a regex that compiles. | A bad rule should fail when an admin saves it, not later when someone records a value. Changed rules apply to new writes only. |
+| `label`, `unit`, `function_id` | Freely editable. | Display and scoping only. |
+
+**Retiring (`active = false`)** is the only "delete" — there is no delete endpoint.
+A retired attribute keeps every value already recorded against it, and those values
+still count in rollups (`sum_by_function` doesn't look at `active`). It just takes no
+new values: `validate_and_coerce` (shared by `set_attribute_value` and `record_kpi`)
+rejects writes to it. Reactivating undoes this. To change a locked `data_type`, retire
+the attribute and add a new one with a new `key`.
+
+A retired KPI takes no new `kpi_record` rows, **imports included**. To backfill history
+for one, reactivate it, import, then retire it again. Each step is audit-logged.
+
+A retired attribute's stored value can still be **cleared** (set to null), so deletion
+requests (spec §8) work on retired fields. `required` stops applying once retired.
+
+A KPI that is a function's **homepage default** (`home_chart_default`) can't be retired
+or moved to another function until that default is changed. Moving it to the same
+function or making it shared (`function_id` null) is fine, because the default still
+works (docs/home-chart.md).
+
 ## `kpi_record`
 
 KPIs are catalogued in `attribute` like any other volatile field (`applies_to =
@@ -447,10 +488,12 @@ Two things to watch when fixing the seeds:
 - `lc.type` is stored as `'LC'` / `'MC'` (uppercase). The spec's lowercase
   `lc` / `mc` is informal wording, so keep the implemented values.
 
-The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record` and
-`deletion_request` tables are not built yet. Their model files under
-`backend/app/models/` are empty stubs (`deletion_request` goes in `privacy.py`,
-next to `audit_log`). Build them to the spec directly.
+The `permission_matrix` and `deletion_request` tables are not built yet
+(`attribute`, `attribute_value` and `kpi_record` are — see above). Until
+`permission_matrix` exists, grants live in code as
+`BASELINE_PERMISSION_MATRIX` in `app/core/permissions.py`. Its model file
+`backend/app/models/permission.py` is an empty stub, and `deletion_request`
+goes in `privacy.py`, next to `audit_log`. Build them to the spec directly.
 
 ## Repository layer
 
@@ -459,7 +502,9 @@ next to `audit_log`). Build them to the spec directly.
 `backend/app/repositories/attribute.py` is the write/read path for
 `attribute_value` (`set_attribute_value`, `get_attribute_value`,
 `validate_and_coerce`) — see "EAV" above for why writes must go through here
-rather than constructing rows directly. `backend/app/repositories/kpi.py`
+rather than constructing rows directly — and for the catalog itself
+(`list_attributes`, `create_attribute`, `update_attribute`,
+`deactivate_attribute`, `activate_attribute`; see "Editing the catalog"). `backend/app/repositories/kpi.py`
 is the write path and rollup query for `kpi_record` (`record_kpi`,
 `sum_by_function`). As more tickets add read patterns (e.g. "all memberships
 for an LC", "who leads this team"), add functions to the relevant file

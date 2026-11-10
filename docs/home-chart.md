@@ -44,7 +44,9 @@ Two things decide what's on it:
   all is no points**, so the page says "No data exists" rather than drawing a flat
   line.
 - **No default and no pick → no KPI**, no points; the choice list is still returned.
-- **A default that's since been deactivated** counts as no default, not an error.
+- **A default that's since been deactivated** counts as no default, not an error. The
+  Admin console refuses to retire or move a KPI that is a default (DEV-0050), so this
+  fallback only covers rows changed outside it.
 - **Picking a KPI outside the allowed set → 400.** It is never silently swapped for
   the default, so the chart never shows a different KPI from the one asked for. The
   message is the same whatever the reason (unknown, inactive, another function's), so

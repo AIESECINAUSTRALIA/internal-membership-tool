@@ -402,9 +402,8 @@ the shared table rules in §2A.
 | Memberships | Assign a person to an LC, position and function with start and end dates. End, extend, correct or transfer. |
 | Teams | Create, rename, disband. Move members between teams, reassign the leader, re-parent to another function. |
 | Positions & functions | Add, rename, deactivate, and set position rank (§3.4). MC can also manage functions from Settings (§2A.8). |
-| KPIs (metrics) | Add, edit and retire metrics in the `attribute` catalog (§4.2). |
+| Metrics & custom fields | Add, edit and retire KPIs (metrics), and add function-specific fields to people or memberships. Both are rows of the one `attribute` catalog (§4.2), so they share one screen with a filter. |
 | Terms | Define terms such as `26.1` and their dates (§5.3). |
-| Custom fields | Add function-specific fields to people or memberships (§4.2). |
 | Permission matrix | Edit who can do what, subject to the no-granting rule (§3.5). Every change is logged. |
 | Auditing | Read the audit log (§2A.10). |
 

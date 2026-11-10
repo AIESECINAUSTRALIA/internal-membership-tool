@@ -265,6 +265,52 @@ export type MergeLcResult =
   | { status: 'ok'; summary: MergeLcSummary }
   | { status: 'rejected'; message: string }
 
+/** What an `attribute` catalog row describes (§4.2): a KPI, or a custom field on a
+ * person or on a membership. One table, so the Admin console shows them on one screen. */
+export type AttributeAppliesTo = 'kpi' | 'person' | 'membership'
+
+export type AttributeDataType = CustomField['dataType']
+
+/** `attribute.validation`, applied when a value is written. `min`/`max` are numbers on
+ * number attributes and ISO dates on date attributes; `regex` is for text only. */
+export interface AttributeValidation {
+  required?: boolean
+  min?: number | IsoDate
+  max?: number | IsoDate
+  regex?: string
+}
+
+/** One row of the attribute catalog, as the Admin console sees it. */
+export interface CatalogAttribute {
+  id: string
+  /** Stable machine name code refers to, e.g. `ol_signups`. Fixed once created. */
+  key: string
+  label: string
+  /** Fixed once created: it decides which table holds the values. */
+  appliesTo: AttributeAppliesTo
+  /** KPIs are always 'number'. Locked once `inUse`. */
+  dataType: AttributeDataType
+  /** Display unit for numbers, e.g. "count" or "AUD". */
+  unit: string | null
+  /** The allowed choices, only when `dataType` is 'enum'. */
+  enumOptions: string[] | null
+  validation: AttributeValidation | null
+  /** Set when the attribute only applies to one function. Null means every function. */
+  functionKey: string | null
+  /** Inactive (retired) attributes keep their values but take no new ones. */
+  active: boolean
+  /** True once any value has been recorded against it. */
+  inUse: boolean
+}
+
+export type CreateAttributeInput = Omit<CatalogAttribute, 'id' | 'active' | 'inUse'>
+
+/** Only the fields present are changed. `key` and `appliesTo` can't be. There is no
+ * delete: `active: false` is the soft delete. */
+export type UpdateAttributeInput = Partial<
+  Pick<CatalogAttribute, 'label' | 'dataType' | 'unit' | 'enumOptions' | 'validation' | 'functionKey' | 'active'>
+>
+
 /** What the Manage membership panel shows about one membership (team + term). */
 export interface MembershipDetail {
   membershipId: string
@@ -374,4 +420,11 @@ export interface Api {
 
   // Admin console: People (§2A.2, §1.5).
   listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>>
+
+  // Admin console: Metrics & custom fields (§1.5, §4.2). Each call needs `manage` on
+  // `attribute`. The backend takes `function_id`; the real client maps it to `functionKey`.
+  /** Every catalog row, including inactive ones (`include_inactive=true` on the backend). */
+  listAttributes(): Promise<CatalogAttribute[]>
+  createAttribute(input: CreateAttributeInput): Promise<ActionResult>
+  updateAttribute(attributeId: string, changes: UpdateAttributeInput): Promise<ActionResult>
 }

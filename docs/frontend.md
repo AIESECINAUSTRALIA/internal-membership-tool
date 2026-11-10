@@ -188,9 +188,27 @@ catalog is not decided, so the mock catalog is **empty** and no "About you" box 
 try the form, add an entry to `CUSTOM_FIELD_DEFS` in `api/mock/seed.ts` (text, number,
 date, boolean and enum are supported).
 
+## Admin console: Metrics & custom fields
+
+`/admin/attributes` (`admin/pages/AdminAttributesPage.tsx`, dialogs in
+`admin/AttributeDialogs.tsx`) manages the `attribute` catalog (spec §1.5, §4.2). KPIs and
+custom fields are rows of the same table, so they share one screen with a filter (All /
+KPIs / Person fields / Membership fields), not two screens. Needs `manage` on `attribute`.
+Add and edit use one form that only shows the inputs that fit the data type; deactivate
+is the soft delete. The edit rules (key and applies-to fixed, data type locked once values
+exist, in-use options can't be removed) are in `docs/data-model.md` → "Editing the
+catalog". The mock repeats them in `api/mock/attributeRules.ts`, and its catalog
+(`ATTRIBUTES` in `api/mock/seed.ts`) is the same placeholder list the backend seeds, not
+the real KPI list (still a spec TODO). It is separate from `CUSTOM_FIELD_DEFS`, so the
+Profile page is unaffected until the two are wired together.
+
+Swap note: the backend scopes an attribute by `function_id`, while the frontend uses
+`functionKey` like the rest of the UI, so the real client maps between the two.
+
 ## Not built yet
 
-The Admin console (own sign-in and address, spec §2A.2). The MC/admin permissions table on
+The Admin console screens other than LCs, People, Metrics & custom fields and Auditing
+(see `admin/adminNavConfig.ts`). The MC/admin permissions table on
 the Membership page (spec §2A.5, who may view it is open, §12 #19). Anywhere real KPI data
 would appear (the homepage chart, Tracking, the Data summary/chart/report generator, and
 Settings' Add/Rename/Deactivate function actions): the KPI catalog is still a spec TODO
