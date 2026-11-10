@@ -61,6 +61,9 @@ function TrackSomeone() {
       if (cancelled) return
       const trackable = page.rows.filter((row) => trackableRoleIds(actor, me!.permissions, row).length > 0)
       setCandidates(trackable)
+    }, () => {
+      // Couldn't load (e.g. mock-only data under real sign-in): no candidates, not a crash.
+      if (!cancelled) setCandidates([])
     })
     return () => {
       cancelled = true

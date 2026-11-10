@@ -10,6 +10,7 @@ frontend/src/
   theme/theme.ts        ALL styling. Colours, type, component looks. Read its header comment.
   api/types.ts          Every shape the UI knows about the server, and the one `Api` interface.
   api/index.ts          THE swap point: chooses the mock or the real backend.
+  api/supabaseSession.ts Real Google sign-in (Supabase) + GET /api/v1/me. See docs/auth.md.
   api/mock/             In-memory fake server (seed data, rules). Delete when the backend is real.
   auth/permissions.ts   Pure functions: permission gating and the hierarchy rule (§3.4).
   auth/guards.tsx       Route guards, driven by the signed-in person's `me` payload.
@@ -72,9 +73,50 @@ person, the LC Vice President in oGV at USYD, whose first name is `temp_oGV` (la
 blank). There are no real or realistic names. Tests find people by id (for example
 `p-sam`), never by name. Change names in `buildSeed` in `api/mock/seed.ts`.
 
+## Real sign-in (Google) vs the development sign-in
+
+`VITE_AUTH_MODE` chooses. `mock` is the development sign-in described below, and the
+default on the dev server and in tests. `supabase` shows a single "Sign in with Google"
+button and asks the backend's `GET /api/v1/me` who you are and what you may do; it's the
+default for production builds (`api/authMode.ts`). See `docs/auth.md`
+for the flow and the one-time Supabase/Google setup.
+
+Where the data comes from in `supabase` mode (`api/index.ts`, ticket DEV-0043):
+
+| `Api` method | Source |
+|---|---|
+| `listMembers`, `addMember`, `getMembershipDetail`, `extendTerm`, `moveToTeam` | real backend (`api/http/httpApi.ts`) |
+| `getReferenceData` | LCs, terms and teams (only teams whose term hasn't ended) from the backend, with real database ids; positions and functions from the mock |
+| `getMe`, `signIn`, `signOut` | Supabase + `GET /api/v1/me` (`api/supabaseSession.ts`) |
+| everything else | mock, until its backend endpoints exist |
+
+In `mock` mode every method comes from the mock and the backend is never called.
+
+> **Known gap:** positions and functions come from the mock, and their keys only partly
+> match the backend seeds. Today only the `ogv` and `bd` functions exist on both sides,
+> and the MC positions are missing from the seeds (`docs/data-model.md`, "Known
+> differences"). Until the schema-alignment ticket fixes the seeds, Add member against
+> the real backend only works for those functions.
+
+Failures from the real backend: the write methods (`addMember`, `extendTerm`,
+`moveToTeam`) never throw; they return `{ status: 'rejected', message }` with a
+plain-English message (session expired, no permission, not found, or "Something went
+wrong"). The read methods throw, and each page shows its own error state. A form holding a
+non-numeric id (left over from mock data) is refused before anything is sent.
+
+> **Changing: sign-in moves to EXPA** (decided 2026-11-09, see `docs/auth.md`).
+> `supabase` mode becomes `expa`:
+> - "Sign in with EXPA" goes to `/api/v1/auth/login`.
+> - `getMe` calls `/api/v1/me` with the session cookie (`credentials: 'same-origin'`).
+> - Sign out is `POST /api/v1/auth/logout`.
+>
+> `@supabase/supabase-js`, `supabaseClient.ts`, `supabaseSession.ts`, `VITE_SUPABASE_*` and
+> `VITE_API_URL` go away. The API is always the relative `/api`, which Vite's dev proxy
+> forwards to the backend locally. `mock` mode and the `?as=` personas below don't change.
+
 ## Signing in as a different role (development only)
 
-The sign-in page has one plain button. It signs in as an LC Vice President. To try another
+In mock mode the sign-in page has one plain button. It signs in as an LC Vice President. To try another
 role, load the sign-in page with `?as=`:
 
 | URL | Signs in as |

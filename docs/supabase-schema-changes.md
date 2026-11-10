@@ -10,9 +10,21 @@ each migration to Supabase by hand, in the right order. This page is that
 procedure. If it is ever automated (a GitHub Actions job on merge), update this
 page to say so.
 
-> **Status:** until the backend is deployed and ticket 2 has realigned the seed
-> data, Supabase is only used for sign-in. Nothing here is urgent yet. Follow it
-> once the Supabase database is in use.
+> **Status: superseded — do not follow.** On 2026-11-09 the project moved all hosting to
+> Google Cloud. The database will be **Cloud SQL**, not Supabase, and the Supabase
+> database was never used for app data.
+>
+> Migrations will run automatically as a **Cloud Run Job** before each deploy:
+> - **dev:** on every merge to `main`
+> - **prod:** as part of an approved release
+>
+> This page will be renamed to `docs/database-changes.md` and rewritten for Cloud SQL by
+> the dev-environment ticket. Two rules below still apply unchanged:
+> - Test every migration locally first.
+> - Write migrations so they work while the previous release's code is still live (add
+>   before use, remove in a later release).
+>
+> Design: `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md` §8.
 
 ---
 
