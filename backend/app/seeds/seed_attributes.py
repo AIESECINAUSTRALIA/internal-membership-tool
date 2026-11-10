@@ -26,6 +26,9 @@ from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
+from app.models.kpi import HomeChartDefault
+from app.models.org import Function
+from app.repositories.kpi import set_home_chart_default
 
 # --- Non-KPI custom fields (placeholder — spec §12 item 3) -----------------
 CUSTOM_ATTRIBUTES: list[dict[str, object]] = [
@@ -78,6 +81,14 @@ KPI_CATALOG: list[dict[str, object]] = [
     },
 ]
 
+# --- Homepage chart defaults (placeholder — docs/home-chart.md) -------------
+# function key → KPI key. Replaced once the real per-function KPI list lands
+# (spec §12 item 4); after that, defaults are an admin edit, not a seed change.
+HOME_CHART_DEFAULTS: dict[str, str] = {
+    "ogv": "eps_matched",
+    "ogta_oget": "ep_interviews",
+}
+
 
 def seed_custom_attributes(session: Session) -> None:
     existing_keys = set(session.execute(select(Attribute.key)).scalars())
@@ -93,11 +104,33 @@ def seed_kpi_catalog(session: Session) -> None:
             session.add(Attribute(applies_to=AttributeAppliesTo.KPI, **row))
 
 
+def seed_home_chart_defaults(session: Session) -> None:
+    """Runs after the KPI catalog, since a default points at a KPI."""
+    functions = {f.key: f.id for f in session.execute(select(Function)).scalars()}
+    kpis = {
+        a.key: a
+        for a in session.execute(
+            select(Attribute).where(Attribute.applies_to == AttributeAppliesTo.KPI)
+        ).scalars()
+    }
+    for function_key, kpi_key in HOME_CHART_DEFAULTS.items():
+        # Skip rather than fail if either side isn't seeded, and never
+        # overwrite a default an admin has already changed.
+        if function_key not in functions or kpi_key not in kpis:
+            continue
+        if session.get(HomeChartDefault, functions[function_key]) is None:
+            set_home_chart_default(
+                session, function_id=functions[function_key], attribute=kpis[kpi_key]
+            )
+
+
 def main() -> None:
     with SessionLocal() as session:
         seed_custom_attributes(session)
         session.flush()
         seed_kpi_catalog(session)
+        session.flush()
+        seed_home_chart_defaults(session)
         session.commit()
 
 

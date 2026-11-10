@@ -329,11 +329,23 @@ export interface MembershipDetail {
 // Homepage (§2A.4)
 // ---------------------------------------------------------------------------
 
+/** A KPI the homepage chart can plot. */
+export interface KpiRef {
+  key: string
+  label: string
+  unit: string | null
+}
+
+/** Shape and rules: docs/home-chart.md. */
 export interface HomeChart {
   scope: ChartScope
+  /** The KPI plotted: the one asked for, else the function's default. Null when neither exists. */
+  kpi: KpiRef | null
+  /** What the viewer may pick instead: their function's KPIs plus shared ones. */
+  availableKpis: KpiRef[]
   title: string
   period: 'monthly'
-  /** Empty until the KPI catalog exists (spec §4.3 TODO). The UI then says "No data exists". */
+  /** `month` is "YYYY-MM". Empty when there is no KPI or no record: the UI says "No data exists". */
   points: { month: string; value: number }[]
 }
 
@@ -394,7 +406,8 @@ export interface Api {
   moveToTeam(membershipId: string, teamId: string): Promise<ActionResult>
 
   // Homepage
-  getHomeChart(): Promise<HomeChart>
+  /** `kpiKey` picks a KPI; omit it for the function default. Never changes whose data. */
+  getHomeChart(kpiKey?: string): Promise<HomeChart>
 
   // Admin console: LCs (§2A.2, §1.5). Each change needs `manage` on `lc`.
   /** Every LC including inactive ones; `getReferenceData()` lists active LCs only. */

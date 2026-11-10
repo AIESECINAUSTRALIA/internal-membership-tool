@@ -95,6 +95,12 @@ def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
 CurrentPerson = Annotated[Person | None, Depends(get_current_person)]
 
 
+def get_today() -> date:
+    """Today's date, as a dependency so tests can fix the date
+    (`app.dependency_overrides[get_today] = lambda: date(...)`)."""
+    return date.today()
+
+
 @dataclass(frozen=True)
 class CurrentActor:
     """The signed-in person and their active memberships, for feature endpoints."""

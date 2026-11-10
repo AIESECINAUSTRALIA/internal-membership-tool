@@ -39,6 +39,10 @@ export interface SupabaseSessionOptions {
   /** Where Google sends the browser back to. Defaults to this site's /sign-in. */
   redirectTo?: string
   fetch?: typeof fetch
+  /** Where `getMe` gets the position list it matches `/me`'s position keys against.
+   * Defaults to `base.getReferenceData()`. When `base` calls the real backend, pass
+   * the mock's positions instead, so signing in never depends on a second request. */
+  getPositions?: () => Promise<Position[]>
 }
 
 /** The backend said "valid Google account, but not an allowed domain" (HTTP 403). */
@@ -143,6 +147,23 @@ function unknownPosition(position: LookupResponse, lc: Lc): Position {
 }
 
 // ---------------------------------------------------------------------------
+// Auth headers for the real data calls (api/http/httpApi.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Gives `createHttpApi` its `getAuthHeaders`: the current session's access token as
+ * `Authorization: Bearer …`, or no headers when signed out (the backend then answers
+ * 401). Reads the session on every call, so a token Supabase refreshed is picked up.
+ */
+export function bearerFrom(auth: Pick<SessionAuth, 'getSession'>): () => Promise<Record<string, string>> {
+  return async (): Promise<Record<string, string>> => {
+    const { data } = await auth.getSession()
+    const token = data.session?.access_token
+    return token ? { Authorization: `Bearer ${token}` } : {}
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The Api wrapper
 // ---------------------------------------------------------------------------
 
@@ -153,6 +174,7 @@ export function withSupabaseSession(base: Api, options: SupabaseSessionOptions):
   const { auth, hostedDomain } = options
   const apiUrl = options.apiUrl.replace(/\/+$/, '')
   const fetchFn = options.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args))
+  const getPositions = options.getPositions ?? (async () => (await base.getReferenceData()).positions)
 
   // When getMe() itself signs the person out (401/403), it already reports the outcome.
   // The "signed out" event that follows must not trigger another getMe(), which would
@@ -191,7 +213,7 @@ export function withSupabaseSession(base: Api, options: SupabaseSessionOptions):
       if (!response.ok) throw new Error(`GET /api/v1/me failed with HTTP ${response.status}`)
 
       const body = (await response.json()) as MeResponse
-      const { positions } = await base.getReferenceData()
+      const positions = await getPositions()
       return meFromResponse(body, positions)
     },
 

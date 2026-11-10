@@ -78,8 +78,31 @@ blank). There are no real or realistic names. Tests find people by id (for examp
 `VITE_AUTH_MODE` chooses. `mock` is the development sign-in described below, and the
 default on the dev server and in tests. `supabase` shows a single "Sign in with Google"
 button and asks the backend's `GET /api/v1/me` who you are and what you may do; it's the
-default for production builds (`api/authMode.ts`). The rest of the data stays mock for now. See `docs/auth.md`
+default for production builds (`api/authMode.ts`). See `docs/auth.md`
 for the flow and the one-time Supabase/Google setup.
+
+Where the data comes from in `supabase` mode (`api/index.ts`, ticket DEV-0043):
+
+| `Api` method | Source |
+|---|---|
+| `listMembers`, `addMember`, `getMembershipDetail`, `extendTerm`, `moveToTeam` | real backend (`api/http/httpApi.ts`) |
+| `getReferenceData` | LCs, terms and teams (only teams whose term hasn't ended) from the backend, with real database ids; positions and functions from the mock |
+| `getMe`, `signIn`, `signOut` | Supabase + `GET /api/v1/me` (`api/supabaseSession.ts`) |
+| everything else | mock, until its backend endpoints exist |
+
+In `mock` mode every method comes from the mock and the backend is never called.
+
+> **Known gap:** positions and functions come from the mock, and their keys only partly
+> match the backend seeds. Today only the `ogv` and `bd` functions exist on both sides,
+> and the MC positions are missing from the seeds (`docs/data-model.md`, "Known
+> differences"). Until the schema-alignment ticket fixes the seeds, Add member against
+> the real backend only works for those functions.
+
+Failures from the real backend: the write methods (`addMember`, `extendTerm`,
+`moveToTeam`) never throw; they return `{ status: 'rejected', message }` with a
+plain-English message (session expired, no permission, not found, or "Something went
+wrong"). The read methods throw, and each page shows its own error state. A form holding a
+non-numeric id (left over from mock data) is refused before anything is sent.
 
 > **Changing: sign-in moves to EXPA** (decided 2026-11-09, see `docs/auth.md`).
 > `supabase` mode becomes `expa`:
@@ -113,7 +136,8 @@ These are in the mock and the frontend, but **not in the spec or schema yet**:
   function, and nobody else does (spec §2 says "for LCP and MCP").
 - **`Position.homeChartScope`**: which default chart the homepage shows. Member and Team
   Leader see a team chart, LCVP and LCP a function chart (as requested). MC positions see
-  all of Australia, which is a guess (spec §12 #12).
+  all of Australia, which is a guess (spec §12 #12). Any other position gets the team
+  chart, the narrowest scope (backend `home_chart_scope`).
 - **The permission matrix** in `api/mock/seed.ts` is illustrative. The real seed is a spec
   TODO (§3.3). In particular the mock lets Team Leaders extend terms but not move people,
   and gives LCVPs `edit` at `function` scope but `create` at `lc` scope.

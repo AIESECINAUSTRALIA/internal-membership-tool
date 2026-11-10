@@ -172,14 +172,17 @@ def make_kpi_attribute(
     *,
     key: str = "test_ol_signups",
     minimum: float = 0,
+    label: str = "OL Signups",
+    function: Function | None = None,
 ) -> Attribute:
     attribute = Attribute(
         key=key,
-        label="OL Signups",
+        label=label,
         applies_to=AttributeAppliesTo.KPI,
         data_type=AttributeDataType.NUMBER,
         unit="count",
         validation={"required": True, "min": minimum},
+        function_id=function.id if function else None,
         active=True,
     )
     session.add(attribute)
