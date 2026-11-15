@@ -18,10 +18,11 @@ import {
 } from '@mui/material'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import dayjs from 'dayjs'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import { useApi } from '../api/ApiContext'
-import type { CustomField, CustomFieldValue, Me } from '../api/types'
+import { HttpError } from '../api/http/httpApi'
+import type { CustomField, CustomFieldValue, Me, MembershipView } from '../api/types'
 import { useAuth } from '../auth/authContext'
 import { formatDate, humanise, SCOPE_LABELS, shortLabel } from '../lib/labels'
 
@@ -118,23 +119,63 @@ function FieldInput({
   }
 }
 
-/** The only editable part of Profile: person-level custom fields (§2A.9, §4.2). */
-function CustomFields({ me }: { me: Me }) {
+/** What to tell the person when a save is refused. A 422 names the field. */
+function saveErrorMessage(error: unknown): string {
+  if (error instanceof HttpError && error.status === 422 && error.detail) return error.detail
+  if (error instanceof HttpError && error.status === 403) return "You don't have permission to edit your record."
+  return "Your changes couldn't be saved. Try again."
+}
+
+/**
+ * The only editable part of Profile: person-level custom fields (§2A.9, §4.2).
+ * Loaded separately from `me`, so a failure here shows an error in this section only.
+ */
+function CustomFields() {
   const api = useApi()
-  const { setMe } = useAuth()
-  const [values, setValues] = useState<Record<string, CustomFieldValue>>(() =>
-    Object.fromEntries(me.person.customFields.map((f) => [f.key, f.value])),
-  )
+  const [fields, setFields] = useState<CustomField[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [values, setValues] = useState<Record<string, CustomFieldValue>>({})
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
-  if (me.person.customFields.length === 0) return null
+  const showFields = (loaded: CustomField[]) => {
+    setFields(loaded)
+    setValues(Object.fromEntries(loaded.map((f) => [f.key, f.value])))
+  }
+
+  useEffect(() => {
+    let cancelled = false
+    api.getMyCustomFields().then(
+      (loaded) => {
+        if (!cancelled) showFields(loaded)
+      },
+      () => {
+        if (!cancelled) setLoadFailed(true)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
+  if (loadFailed) {
+    return (
+      <Section id="profile-fields" title="About you">
+        <Alert severity="error">Your custom fields couldn&rsquo;t be loaded. Refresh the page to try again.</Alert>
+      </Section>
+    )
+  }
+  if (!fields || fields.length === 0) return null
 
   const handleSave = async () => {
     setSaving(true)
+    setSaveError(null)
     try {
-      setMe(await api.updateMyCustomFields(values))
+      showFields(await api.updateMyCustomFields(values))
       setSaved(true)
+    } catch (error) {
+      setSaveError(saveErrorMessage(error))
     } finally {
       setSaving(false)
     }
@@ -143,7 +184,7 @@ function CustomFields({ me }: { me: Me }) {
   return (
     <Section id="profile-fields" title="About you">
       <Stack spacing={2.5} sx={{ maxWidth: 420 }}>
-        {me.person.customFields.map((field) => (
+        {fields.map((field) => (
           <FieldInput
             key={field.key}
             field={field}
@@ -151,6 +192,7 @@ function CustomFields({ me }: { me: Me }) {
             onChange={(value) => setValues((prev) => ({ ...prev, [field.key]: value }))}
           />
         ))}
+        {saveError && <Alert severity="error">{saveError}</Alert>}
         <Box>
           <Button variant="contained" onClick={handleSave} disabled={saving}>
             Save changes
@@ -166,12 +208,35 @@ function CustomFields({ me }: { me: Me }) {
   )
 }
 
-/** Read-only, newest first, one row per membership (§2A.9). */
-function PositionHistory({ me }: { me: Me }) {
-  const rows = [...me.memberships].sort((a, b) => (a.startDate < b.startDate ? 1 : a.startDate > b.startDate ? -1 : 0))
+/**
+ * Read-only, newest first, one row per membership: past, current and future (§2A.9).
+ * Loaded separately: `me.memberships` holds only the active ones.
+ */
+function PositionHistory() {
+  const api = useApi()
+  const [rows, setRows] = useState<MembershipView[] | null>(null)
+  const [loadFailed, setLoadFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    api.getMyMembershipHistory().then(
+      (loaded) => {
+        if (!cancelled) setRows(loaded)
+      },
+      () => {
+        if (!cancelled) setLoadFailed(true)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [api])
+
   return (
     <Section id="profile-history" title="Position history">
-      {rows.length === 0 ? (
+      {loadFailed ? (
+        <Alert severity="error">Your position history couldn&rsquo;t be loaded. Refresh the page to try again.</Alert>
+      ) : rows === null ? null : rows.length === 0 ? (
         <Typography>No data exists</Typography>
       ) : (
         <Box sx={{ overflowX: 'auto' }}>
@@ -251,8 +316,8 @@ export function ProfilePage() {
         Profile
       </Typography>
       <Identity me={me} />
-      <CustomFields me={me} />
-      <PositionHistory me={me} />
+      <CustomFields />
+      <PositionHistory />
       <Permissions me={me} />
     </Stack>
   )

@@ -9,8 +9,11 @@
  *   `GET /api/v1/me`. The default for production builds. The membership-summary
  *   methods (listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam) and
  *   the LCs/terms/teams in getReferenceData come from the real backend
- *   (`http/httpApi.ts`, ticket DEV-0043, spec §2A.5), sent with the Supabase access
- *   token. Everything else still comes from the mock until its endpoints exist.
+ *   (`http/httpApi.ts`, ticket DEV-0043, spec §2A.5), as do Profile's custom fields
+ *   and position history (getMyCustomFields, updateMyCustomFields,
+ *   getMyMembershipHistory, ticket DEV-0045, spec §2A.9), sent with
+ *   the Supabase access token. Everything else still comes from the mock until its
+ *   endpoints exist.
  *
  * The mock never grants real access: it lives only in the browser, and the backend
  * only trusts Supabase-signed tokens.
