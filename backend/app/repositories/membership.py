@@ -109,14 +109,15 @@ def _resolve_term_id(session: Session, term_id: int | None, start_date: date) ->
     """The term a new membership belongs to, or None if there isn't a valid one.
 
     An explicit `term_id` must exist; otherwise the term covering `start_date`
-    (the latest-starting one if several overlap).
+    (the latest-starting one if several overlap; the newest-created one if
+    they also start on the same day, so the choice is never arbitrary).
     """
     if term_id is not None:
         return term_id if session.get(Term, term_id) else None
     stmt = (
         select(Term.id)
         .where(Term.start_date <= start_date, Term.end_date >= start_date)
-        .order_by(Term.start_date.desc())
+        .order_by(Term.start_date.desc(), Term.id.desc())
         .limit(1)
     )
     return session.execute(stmt).scalar_one_or_none()
