@@ -73,3 +73,27 @@ class KpiRecord(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     recorded_by: Mapped[int] = mapped_column(ForeignKey("membership.id"))
     recorded_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
+class HomeChartDefault(Base):
+    """Which KPI the homepage chart shows for a function when the viewer doesn't
+    pick one (spec §2A.4, decision in docs/home-chart.md). One row per
+    function; a function with no row has no default, and the chart shows
+    "No data exists".
+
+    A lookup table rather than a `default_kpi_id` column on `function`, so
+    `function` and `attribute` don't reference each other
+    (`attribute.function_id` already points at `function`).
+
+    `attribute_id` must be an active KPI attribute that is this function's own
+    or shared (`function_id` NULL). A plain FK can't express that, so
+    `app/repositories/kpi.py::set_home_chart_default` checks it and is the
+    only write path.
+    """
+
+    __tablename__ = "home_chart_default"
+
+    # The PK is the function: at most one default per function, enforced by
+    # the database rather than by convention.
+    function_id: Mapped[int] = mapped_column(ForeignKey("function.id"), primary_key=True)
+    attribute_id: Mapped[int] = mapped_column(ForeignKey("attribute.id"))

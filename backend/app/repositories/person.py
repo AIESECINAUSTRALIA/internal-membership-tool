@@ -1,10 +1,13 @@
 """The signed-in person's own record: the Profile page (Spec §2A.9).
 
-Two jobs:
+Behind the Profile routes under `/api/v1/me`:
 
-- `build_me` assembles the `Me` payload (frontend/src/api/types.ts): identity,
-  person-level custom fields, position history and resolved permissions.
-- `update_own_custom_fields` writes the person's own custom fields.
+- `get_custom_fields` lists the person's editable custom fields and their values,
+  and `update_own_custom_fields` writes them (`/me/custom-fields`).
+- `membership_history` lists every membership they have held (`/me/memberships`).
+
+Identity, active memberships and permissions come from `GET /api/v1/me` instead
+(`app/api/v1/auth.py`).
 
 Every function here takes the person from the signed-in actor and never from
 the request, so these functions cannot read or write anyone else's record.
@@ -21,7 +24,6 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.core.permissions import MembershipContext, resolve_all_grants
 from app.models.attribute import (
     Attribute,
     AttributeAppliesTo,
@@ -38,7 +40,7 @@ from app.repositories.attribute import (
     stored_value,
     validate_and_coerce,
 )
-from app.repositories.membership import person_name_parts, position_payload
+from app.repositories.membership import position_payload
 
 
 class UnknownCustomFieldError(ValueError):
@@ -196,14 +198,18 @@ def update_own_custom_fields(
 
 
 # ---------------------------------------------------------------------------
-# Me
+# Position history
 # ---------------------------------------------------------------------------
 
 
-def _membership_history(session: Session, person_id: int) -> list[dict[str, Any]]:
+def membership_history(session: Session, person_id: int) -> list[dict[str, Any]]:
     """Every membership this person has held (past, current and future), newest
     first, in the `MembershipView` shape. Filtered by `person_id`, so it can never
-    include anyone else's (§2A.9)."""
+    include anyone else's (§2A.9).
+
+    Read-only display data: nothing here grants access. Access comes from the
+    active memberships alone (`GET /api/v1/me`, §3.2).
+    """
     memberships = (
         session.execute(
             select(Membership)
@@ -251,32 +257,3 @@ def _membership_history(session: Session, person_id: int) -> list[dict[str, Any]
             }
         )
     return history
-
-
-def build_me(
-    session: Session,
-    *,
-    person: Person,
-    active_memberships: Sequence[Membership],
-    contexts: Sequence[MembershipContext],
-) -> dict[str, Any]:
-    """The `Me` payload for the signed-in person (§2A.9).
-
-    `contexts` are the person's active memberships as `MembershipContext`s;
-    permissions are resolved from them exactly as the server enforces them (§3.2).
-    """
-    first_name, last_name = person_name_parts(person)
-    return {
-        "person": {
-            "id": str(person.id),
-            "firstName": first_name,
-            "lastName": last_name,
-            "email": person.aiesec_email,
-            "customFields": get_custom_fields(session, person.id, active_memberships),
-        },
-        "memberships": _membership_history(session, person.id),
-        "permissions": [
-            {"resource": resource, "action": action, "scope": scope}
-            for resource, action, scope in resolve_all_grants(contexts)
-        ],
-    }

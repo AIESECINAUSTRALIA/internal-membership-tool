@@ -25,6 +25,7 @@ from app.core.permissions import (
     can_move_to_team,
     can_view_membership,
     get_acting_membership,
+    home_chart_scope,
     position_level,
     resolve_widest_scope,
 )
@@ -77,8 +78,9 @@ def person_name_parts(person: Person) -> tuple[str, str]:
 def position_payload(pos: Position | None, lc: LC | None) -> dict[str, Any]:
     """The `Position` shape from frontend/src/api/types.ts for a membership's position.
 
-    `level`, `presidential`, `homeChartScope` and `holdsTeam` are derived here
-    until the schema-alignment ticket adds them as columns (spec §2).
+    `level`, `presidential` and `holdsTeam` are derived here until the
+    schema-alignment ticket adds them as columns (spec §2). `homeChartScope`
+    comes from `home_chart_scope` (docs/home-chart.md).
     """
     pos_key = pos.key if pos else "member"
     is_mc = lc is not None and lc.type.value == "MC"
@@ -89,7 +91,7 @@ def position_payload(pos: Position | None, lc: LC | None) -> dict[str, Any]:
         "rank": _position_rank(pos),
         "canAddSameRank": getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"}),
         "presidential": pos_key in {"lcp", "mcp"},
-        "homeChartScope": "all" if is_mc else "team",
+        "homeChartScope": home_chart_scope(pos_key),
         "holdsTeam": pos_key in {"member", "team_leader"},
     }
 

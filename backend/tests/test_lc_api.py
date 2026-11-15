@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentActor, get_current_actor, get_db
+from app.api.deps import CurrentActor, get_current_actor, get_db, get_token_verifier
 from app.main import app
 from app.models.membership import Membership
 from app.models.org import LC, LCType, Position
@@ -130,8 +130,25 @@ def test_other_actors_cannot_manage_lcs(lc_api: LcApiFixture, actor_name: str) -
 def test_unauthenticated_requests_are_rejected(lc_api: LcApiFixture) -> None:
     del app.dependency_overrides[get_current_actor]
 
+    # Authentication is configured for the test, but no credentials are supplied.
+    # The verifier must never be called without an access token.
+    def unexpected_verification():
+        class TestVerifier:
+            def verify(self, token: str):
+                raise AssertionError("Verifier should not run without credentials")
+
+        return TestVerifier()
+
+    app.dependency_overrides[get_token_verifier] = unexpected_verification
+
     assert lc_api.client.get("/api/v1/lcs").status_code == 401
-    assert lc_api.client.post("/api/v1/lcs", json={"name": "x", "lc_type": "LC"}).status_code == 401
+    assert (
+        lc_api.client.post(
+            "/api/v1/lcs",
+            json={"name": "x", "lc_type": "LC"},
+        ).status_code
+        == 401
+    )
 
 
 def test_any_signed_in_actor_can_list_lcs_and_state_timezones(lc_api: LcApiFixture) -> None:

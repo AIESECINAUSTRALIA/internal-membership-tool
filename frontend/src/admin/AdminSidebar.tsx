@@ -7,7 +7,6 @@ import GroupsOutlined from '@mui/icons-material/GroupsOutlined'
 import AccountTreeOutlined from '@mui/icons-material/AccountTreeOutlined'
 import BarChartOutlined from '@mui/icons-material/BarChartOutlined'
 import EventOutlined from '@mui/icons-material/EventOutlined'
-import TuneOutlined from '@mui/icons-material/TuneOutlined'
 import LockOutlined from '@mui/icons-material/LockOutlined'
 import HistoryOutlined from '@mui/icons-material/HistoryOutlined'
 import type { ReactElement } from 'react'
@@ -25,9 +24,8 @@ const ICONS: Record<AdminNavItem['key'], ReactElement> = {
   memberships: <BadgeOutlined />,
   teams: <GroupsOutlined />,
   positions_functions: <AccountTreeOutlined />,
-  kpis: <BarChartOutlined />,
+  attributes: <BarChartOutlined />,
   terms: <EventOutlined />,
-  custom_fields: <TuneOutlined />,
   permission_matrix: <LockOutlined />,
   auditing: <HistoryOutlined />,
 }

@@ -12,6 +12,9 @@ export interface AuthState {
   actor: Actor | null
   /** False when signed in but with no active membership: sees the not-allocated page (§9). */
   allocated: boolean
+  /** Why the last sign-in attempt failed (e.g. not an AIESEC account), shown on the
+   * sign-in page. Null when there is nothing to report. */
+  error: string | null
   signIn: () => Promise<void>
   signOut: () => Promise<void>
   /** Replace `me` after an edit, so every page sees the new values. */

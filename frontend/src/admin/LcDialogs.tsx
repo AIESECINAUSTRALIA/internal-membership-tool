@@ -6,83 +6,14 @@ import {
   DialogContent,
   DialogTitle,
   MenuItem,
-  Stack,
   TextField,
   Typography,
 } from '@mui/material'
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 
 import { useApi } from '../api/ApiContext'
 import type { Lc, MergeLcSummary, StateTimezone } from '../api/types'
-
-/** What every LC dialog needs from the page. */
-interface DialogProps {
-  onClose: () => void
-  /** Called after the change succeeded, so the page can reload its table. */
-  onDone: () => void
-}
-
-/**
- * The shared frame of every LC dialog: title, form body, Cancel/submit buttons, and an
- * error banner for when the server rejects the change. `submit` returns an error message
- * to show, or null when it worked (the frame then calls `onDone` and `onClose`).
- */
-function LcDialogFrame({
-  title,
-  submitLabel,
-  canSubmit,
-  submit,
-  keepOpenOnSuccess = false,
-  onClose,
-  onDone,
-  children,
-}: DialogProps & {
-  title: string
-  submitLabel: string
-  canSubmit: boolean
-  submit: () => Promise<string | null>
-  /** The merge dialog stays open to show its result; the others close. */
-  keepOpenOnSuccess?: boolean
-  children: ReactNode
-}) {
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setError(null)
-    const message = await submit()
-    setBusy(false)
-    if (message !== null) {
-      setError(message)
-      return
-    }
-    if (keepOpenOnSuccess) return
-    onDone()
-    onClose()
-  }
-
-  return (
-    <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            {error && <Alert severity="error">{error}</Alert>}
-            {children}
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained" disabled={!canSubmit || busy}>
-            {submitLabel}
-          </Button>
-        </DialogActions>
-      </form>
-    </Dialog>
-  )
-}
+import { AdminDialogFrame as LcDialogFrame, type AdminDialogProps as DialogProps } from './AdminDialogFrame'
 
 /** The state picker, fed by the state → timezone lookup so it never drifts from the server. */
 function StateSelect({

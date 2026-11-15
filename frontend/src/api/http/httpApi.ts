@@ -1,69 +1,279 @@
 /**
- * The parts of `Api` that talk to the real backend.
+ * Real HTTP implementation of the `Api` interface (Spec §2A.5 — ticket DEV-0043).
  *
- * Only Profile (spec §2A.9) is real so far: `getMe` and `updateMyCustomFields`.
- * `api/index.ts` combines these with the mock for every other method. As more
- * endpoints land, add their methods here; once every method is here, the mock goes.
+ * Wired to the real backend so far:
+ *   listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam (§2A.5)
+ *   getMyCustomFields, updateMyCustomFields, getMyMembershipHistory (Profile, §2A.9 — DEV-0045)
  *
- * Who is signed in: until real sign-in (ticket 7) exists, the backend trusts an
- * `X-Actor-Email` header (only when `DEV_ACTOR_HEADER_ENABLED=true`). Ticket 7
- * replaces `authHeaders` below with the Supabase access token. Nothing else changes.
+ * Every other method comes from `options.fallback` (today, the mock), so the rest
+ * of the app keeps running while those backend tickets are still in progress.
+ *
+ * AUTH: this file doesn't know how people sign in. The caller passes
+ * `getAuthHeaders()`, which runs before every request. Supabase mode returns
+ * `{ Authorization: 'Bearer <access token>' }` (see `api/index.ts`); a cookie
+ * session (EXPA sign-in, later) can return `{}`. The backend decides who the
+ * caller is from those headers alone — never from anything else we send.
+ *
+ * URL SHAPE (backend route → frontend method):
+ *   POST /api/v1/members/summary           → listMembers
+ *   POST /api/v1/members                   → addMember
+ *   GET  /api/v1/members/:id               → getMembershipDetail
+ *   POST /api/v1/members/:id/extend-term   → extendTerm
+ *   POST /api/v1/members/:id/move-to-team  → moveToTeam
+ *   GET  /api/v1/me/custom-fields          → getMyCustomFields
+ *   PATCH /api/v1/me/custom-fields         → updateMyCustomFields
+ *   GET  /api/v1/me/memberships            → getMyMembershipHistory
  */
-import type { Api, CustomFieldValue, Me } from '../types'
 
-export type HttpApi = Pick<Api, 'getMe' | 'updateMyCustomFields'>
+import type {
+  ActionResult,
+  Lc,
+  ReferenceData,
+  Team,
+  Term,
+  AddMemberInput,
+  AddMemberResult,
+  Api,
+  CustomField,
+  CustomFieldValue,
+  MembershipView,
+  IsoDate,
+  MemberQuery,
+  MembershipDetail,
+  Page,
+  MemberSummaryRow,
+} from '../types'
 
-export interface HttpApiOptions {
-  /** e.g. "http://localhost:8000" (`VITE_API_URL`). */
-  baseUrl: string
-  /** Dev only: the AIESEC email to act as (`VITE_DEV_ACTOR_EMAIL`). */
-  actorEmail: string
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * A database id from the frontend's string id: '12' → 12. Anything else → null.
+ * A non-numeric id (e.g. the mock's 'lc-usyd') means the form was built from stale
+ * reference data, so the caller refuses it rather than sending it to the backend.
+ */
+function toDbId(id: string | undefined | null): number | null {
+  return id != null && /^\d+$/.test(id) ? Number(id) : null
 }
 
-/** Thrown for any non-2xx response. `message` is the server's explanation. */
-export class ApiError extends Error {
-  readonly status: number
+/** What the user sees when a form holds an id the backend can't accept. */
+const STALE_FORM: { status: 'rejected'; message: string } = {
+  status: 'rejected',
+  message: 'The form is out of date. Close it and try again.',
+}
 
-  constructor(status: number, message: string) {
-    super(message)
-    this.name = 'ApiError'
+// ---------------------------------------------------------------------------
+// Options
+// ---------------------------------------------------------------------------
+
+export interface HttpApiOptions {
+  /** Headers that prove who is calling. Supabase mode: { Authorization: 'Bearer …' }.
+   *  Cookie-session sign-in (EXPA, later): {}. Called before every request, so a
+   *  refreshed token is always picked up. */
+  getAuthHeaders: () => Promise<Record<string, string>>
+  /** The API origin. '' = same origin (Firebase Hosting forwards /api/**). */
+  baseUrl?: string
+  /** The `Api` that still answers the non-membership methods (today, the mock). */
+  fallback: Api
+}
+
+// ---------------------------------------------------------------------------
+// HTTP helpers
+// ---------------------------------------------------------------------------
+
+/** A non-2xx answer from the backend. `status` lets callers word the error. */
+export class HttpError extends Error {
+  readonly status: number
+  /** The server's own explanation (FastAPI's `{"detail": "..."}`), when it gave one. */
+  readonly detail: string | null
+
+  constructor(method: string, path: string, status: number, text: string) {
+    super(`${method} ${path} → ${status}: ${text}`)
+    this.name = 'HttpError'
     this.status = status
+    this.detail = detailFrom(text)
   }
 }
 
-async function errorFrom(response: Response): Promise<ApiError> {
-  // FastAPI errors look like {"detail": "..."} (or a list, for request-shape errors).
-  const body = await response.json().catch(() => null)
-  const detail: unknown = body?.detail
-  const message = typeof detail === 'string' ? detail : `Request failed (${response.status})`
-  return new ApiError(response.status, message)
+function detailFrom(text: string): string | null {
+  try {
+    const detail: unknown = JSON.parse(text)?.detail
+    return typeof detail === 'string' ? detail : null
+  } catch {
+    return null
+  }
 }
 
-export function createHttpApi({ baseUrl, actorEmail }: HttpApiOptions): HttpApi {
-  const authHeaders = (): Record<string, string> => ({ 'X-Actor-Email': actorEmail })
+interface Transport {
+  post<T>(path: string, body: unknown): Promise<T>
+  patch<T>(path: string, body: unknown): Promise<T>
+  get<T>(path: string): Promise<T>
+}
 
-  async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${baseUrl}/api/v1${path}`, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...authHeaders(), ...init.headers },
+function createTransport(options: HttpApiOptions): Transport {
+  const baseUrl = options.baseUrl ?? import.meta.env.VITE_API_URL ?? ''
+
+  async function request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
+    const headers = { 'Content-Type': 'application/json', ...(await options.getAuthHeaders()) }
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
     })
-    if (!response.ok) throw await errorFrom(response)
-    return (await response.json()) as T
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new HttpError(method, path, res.status, text)
+    }
+    return res.json() as Promise<T>
   }
 
   return {
-    async getMe() {
-      try {
-        return await request<Me>('/me')
-      } catch (error) {
-        // 401 = nobody signed in, which `getMe` reports as null.
-        if (error instanceof ApiError && error.status === 401) return null
-        throw error
-      }
+    post: (path, body) => request('POST', path, body),
+    patch: (path, body) => request('PATCH', path, body),
+    get: (path) => request('GET', path),
+  }
+}
+
+/** What the user sees when a change could not be saved, by HTTP status. */
+function failureMessage(error: unknown): string {
+  const status = error instanceof HttpError ? error.status : null
+  if (status === 401) return 'Your session has expired. Sign in again.'
+  if (status === 403) return "You don't have permission to do that."
+  if (status === 404) return 'That membership no longer exists. Refresh the page.'
+  return 'Something went wrong. Try again.'
+}
+
+/**
+ * Runs a write request. Writes never throw: the dialogs only look at `status`, so a
+ * failure (HTTP error or no network) comes back as a rejection the user can read.
+ * Reads (listMembers, getMembershipDetail, getReferenceData) still throw, and the
+ * pages show their own error state.
+ */
+async function action<T>(send: () => Promise<T>): Promise<T | { status: 'rejected'; message: string }> {
+  try {
+    return await send()
+  } catch (error) {
+    return { status: 'rejected', message: failureMessage(error) }
+  }
+}
+
+/** A membership id, made safe to put in a URL path. */
+function idPath(membershipId: string): string {
+  return `/api/v1/members/${encodeURIComponent(membershipId)}`
+}
+
+// ---------------------------------------------------------------------------
+// Factory
+// ---------------------------------------------------------------------------
+
+/**
+ * Creates an `Api` implementation that:
+ * - Calls the real FastAPI backend for the membership-summary and Profile methods.
+ * - Uses `options.fallback` for everything else (getMe, signIn, signOut, admin, …).
+ */
+export function createHttpApi(options: HttpApiOptions): Api {
+  const http = createTransport(options)
+
+  return {
+    ...options.fallback,
+
+    /**
+     * LCs, terms and teams come from the backend, so their ids are real database
+     * ids. Positions and functions still come from the fallback: the backend has no
+     * endpoint for them yet. KNOWN GAP: the mock's keys and the backend seeds only
+     * partly agree (functions: only `ogv` and `bd` match today; the MC positions are
+     * missing from the seeds). See docs/data-model.md "Known differences"; the
+     * schema-alignment ticket fixes the seeds.
+     */
+    async getReferenceData(): Promise<ReferenceData> {
+      const [fromBackend, local] = await Promise.all([
+        http.get<{ lcs: Lc[]; terms: Term[]; teams: Team[] }>('/api/v1/reference/membership-options'),
+        options.fallback.getReferenceData(),
+      ])
+      return { ...local, lcs: fromBackend.lcs, terms: fromBackend.terms, teams: fromBackend.teams }
     },
 
-    async updateMyCustomFields(values: Record<string, CustomFieldValue>) {
-      return request<Me>('/me/custom-fields', { method: 'PATCH', body: JSON.stringify(values) })
+    // -------------------------------------------------------------------
+    // Membership summary — REAL backend (Spec §2A.5)
+    // -------------------------------------------------------------------
+
+    async listMembers(query: MemberQuery): Promise<Page<MemberSummaryRow>> {
+      return http.post<Page<MemberSummaryRow>>('/api/v1/members/summary', query)
+    },
+
+    async addMember(input: AddMemberInput): Promise<AddMemberResult> {
+      const lcId = toDbId(input.lcId)
+      const teamId = toDbId(input.teamId)
+      const termId = toDbId(input.termId)
+      // Which of the actor's own memberships this add is made under (optional).
+      const actingMembershipId = toDbId(input.membershipId)
+      // An id that was given but isn't numeric came from stale reference data.
+      const stale =
+        lcId === null ||
+        (input.teamId && teamId === null) ||
+        (input.termId && termId === null) ||
+        (input.membershipId && actingMembershipId === null)
+      if (stale) return STALE_FORM
+      const body = {
+        email: input.email,
+        lcId,
+        positionKey: input.positionKey,
+        functionKey: input.functionKey,
+        teamId,
+        startDate: input.startDate,
+        endDate: input.endDate,
+        termId,
+        firstName: input.firstName ?? null,
+        lastName: input.lastName ?? null,
+        confirmedExisting: input.confirmedExisting ?? false,
+        membershipId: actingMembershipId,
+      }
+      const result = await action(() => http.post<{ status: string; message?: string }>('/api/v1/members', body))
+      // Narrow to the union type the frontend `Api` expects
+      if (result.status === 'needs_name') return { status: 'needs_name' }
+      if (result.status === 'confirm_existing') return { status: 'confirm_existing' }
+      if (result.status === 'created') return { status: 'created' }
+      return { status: 'rejected', message: result.message ?? 'Unknown error' }
+    },
+
+    async getMembershipDetail(membershipId: string): Promise<MembershipDetail> {
+      return http.get<MembershipDetail>(idPath(membershipId))
+    },
+
+    async extendTerm(membershipId: string, newEndDate: IsoDate): Promise<ActionResult> {
+      const result = await action(() =>
+        http.post<{ status: string; message?: string }>(`${idPath(membershipId)}/extend-term`, { newEndDate }),
+      )
+      if (result.status === 'ok') return { status: 'ok' }
+      return { status: 'rejected', message: result.message ?? 'Unknown error' }
+    },
+
+    async moveToTeam(membershipId: string, teamId: string): Promise<ActionResult> {
+      const dbTeamId = toDbId(teamId)
+      if (dbTeamId === null) return STALE_FORM
+      const result = await action(() =>
+        http.post<{ status: string; message?: string }>(`${idPath(membershipId)}/move-to-team`, { teamId: dbTeamId }),
+      )
+      if (result.status === 'ok') return { status: 'ok' }
+      return { status: 'rejected', message: result.message ?? 'Unknown error' }
+    },
+
+    // -------------------------------------------------------------------
+    // Profile — REAL backend (Spec §2A.9)
+    // -------------------------------------------------------------------
+
+    async getMyCustomFields(): Promise<CustomField[]> {
+      return http.get<CustomField[]>('/api/v1/me/custom-fields')
+    },
+
+    async getMyMembershipHistory(): Promise<MembershipView[]> {
+      return http.get<MembershipView[]>('/api/v1/me/memberships')
+    },
+
+    /** Throws `HttpError` when the save is refused; a 422's `detail` says which field. */
+    async updateMyCustomFields(values: Record<string, CustomFieldValue>): Promise<CustomField[]> {
+      return http.patch<CustomField[]>('/api/v1/me/custom-fields', values)
     },
   }
 }

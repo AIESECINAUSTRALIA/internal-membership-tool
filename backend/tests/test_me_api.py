@@ -1,4 +1,7 @@
-"""Tests for the Profile endpoints, `/api/v1/me` (Spec §2A.9).
+"""Tests for the Profile endpoints, `/api/v1/me/custom-fields` and
+`/api/v1/me/memberships` (Spec §2A.9).
+
+`GET /api/v1/me` itself (sign-in) is tested in `tests/auth/`.
 
 Covers the ticket's acceptance criteria:
 - Read and write your own person-level `attribute_value` rows, validated
@@ -38,6 +41,9 @@ from app.models.privacy import AuditLog
 from app.repositories.attribute import get_attribute_value, set_attribute_value
 
 from .helpers import make_attribute, make_function, make_lc, make_membership, make_person, make_term
+
+ME_FIELDS = "/api/v1/me/custom-fields"
+ME_HISTORY = "/api/v1/me/memberships"
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -128,14 +134,10 @@ def client(db_session: Session) -> Generator[Fixture, None, None]:
         app.dependency_overrides.clear()
 
 
-def _fields(body: dict[str, Any]) -> dict[str, Any]:
-    """Custom-field values from a `Me` response, keyed by attribute key.
+def _fields(body: list[dict[str, Any]]) -> dict[str, Any]:
+    """Custom-field values from a `CustomField[]` response, keyed by attribute key.
     Only this test's own `test_me_` fields, so seeded fields don't interfere."""
-    return {
-        f["key"]: f["value"]
-        for f in body["person"]["customFields"]
-        if f["key"].startswith("test_me_")
-    }
+    return {f["key"]: f["value"] for f in body if f["key"].startswith("test_me_")}
 
 
 def _value(session: Session, attribute: Attribute, person: Person) -> object | None:
@@ -159,16 +161,12 @@ def _audit_rows(session: Session, person: Person) -> list[AuditLog]:
 # ---------------------------------------------------------------------------
 
 
-def test_get_me_returns_own_record(client: Fixture) -> None:
-    c, seed = client
-    resp = c.get("/api/v1/me")
+def test_get_lists_every_own_field(client: Fixture) -> None:
+    c, _ = client
+    resp = c.get(ME_FIELDS)
     assert resp.status_code == 200
     body = resp.json()
 
-    person = body["person"]
-    assert person["id"] == str(seed.alice.id)
-    assert (person["firstName"], person["lastName"]) == ("Alice", "Example")
-    assert person["email"] == "test-me-alice@aiesec.net"
     # Nothing saved yet: every field is listed, with no value.
     assert _fields(body) == {
         "test_me_shirt": None,
@@ -177,22 +175,14 @@ def test_get_me_returns_own_record(client: Fixture) -> None:
         "test_me_birthday": None,
         "test_me_vegan": None,
     }
-    shirt = next(f for f in body["person"]["customFields"] if f["key"] == "test_me_shirt")
+    shirt = next(f for f in body if f["key"] == "test_me_shirt")
     assert shirt["enumOptions"] == ["S", "M", "L"]
 
-    # Position history is Alice's only.
-    assert [m["id"] for m in body["memberships"]] == [str(seed.m_alice.id)]
-    assert body["memberships"][0]["position"]["key"] == "member"
-    assert body["memberships"][0]["startDate"] == "2026-01-01"
 
-    # Permissions are the server's resolved grants.
-    assert {"resource": "member_record", "action": "edit", "scope": "own"} in body["permissions"]
-
-
-def test_get_me_does_not_list_membership_attributes(client: Fixture, db_session: Session) -> None:
+def test_get_does_not_list_membership_attributes(client: Fixture, db_session: Session) -> None:
     c, _ = client
     make_attribute(db_session, key="test_me_onboarded", applies_to=AttributeAppliesTo.MEMBERSHIP)
-    keys = [f["key"] for f in c.get("/api/v1/me").json()["person"]["customFields"]]
+    keys = [f["key"] for f in c.get(ME_FIELDS).json()]
     assert "test_me_onboarded" not in keys
 
 
@@ -203,8 +193,8 @@ def test_function_scoped_field_only_for_that_function(client: Fixture, db_sessio
     bd_only.function_id = other_function.id
     db_session.flush()
 
-    assert "test_me_bd_only" not in _fields(c.get("/api/v1/me").json())
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_bd_only": "x"})
+    assert "test_me_bd_only" not in _fields(c.get(ME_FIELDS).json())
+    resp = c.patch(ME_FIELDS, json={"test_me_bd_only": "x"})
     assert resp.status_code == 422
 
 
@@ -216,7 +206,7 @@ def test_function_scoped_field_only_for_that_function(client: Fixture, db_sessio
 def test_update_saves_every_data_type(client: Fixture, db_session: Session) -> None:
     c, seed = client
     resp = c.patch(
-        "/api/v1/me/custom-fields",
+        ME_FIELDS,
         json={
             "test_me_shirt": "M",
             "test_me_notes": "loves hiking",
@@ -246,8 +236,8 @@ def test_update_saves_every_data_type(client: Fixture, db_session: Session) -> N
 
 def test_update_with_null_clears_a_field(client: Fixture, db_session: Session) -> None:
     c, seed = client
-    c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "L"})
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": None})
+    c.patch(ME_FIELDS, json={"test_me_shirt": "L"})
+    resp = c.patch(ME_FIELDS, json={"test_me_shirt": None})
     assert resp.status_code == 200
     assert _fields(resp.json())["test_me_shirt"] is None
     assert _value(db_session, seed.shirt, seed.alice) is None
@@ -255,8 +245,8 @@ def test_update_with_null_clears_a_field(client: Fixture, db_session: Session) -
 
 def test_fields_left_out_are_untouched(client: Fixture) -> None:
     c, _ = client
-    c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "S"})
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_vegan": False})
+    c.patch(ME_FIELDS, json={"test_me_shirt": "S"})
+    resp = c.patch(ME_FIELDS, json={"test_me_vegan": False})
     assert _fields(resp.json())["test_me_shirt"] == "S"
 
 
@@ -275,14 +265,14 @@ def test_invalid_value_is_rejected(
     client: Fixture, db_session: Session, body: dict[str, Any]
 ) -> None:
     c, seed = client
-    resp = c.patch("/api/v1/me/custom-fields", json=body)
+    resp = c.patch(ME_FIELDS, json=body)
     assert resp.status_code == 422
     assert _audit_rows(db_session, seed.alice) == []
 
 
 def test_one_bad_field_saves_nothing(client: Fixture, db_session: Session) -> None:
     c, seed = client
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "M", "test_me_year": 99})
+    resp = c.patch(ME_FIELDS, json={"test_me_shirt": "M", "test_me_year": 99})
     assert resp.status_code == 422
     assert _value(db_session, seed.shirt, seed.alice) is None
     assert _audit_rows(db_session, seed.alice) == []
@@ -291,7 +281,7 @@ def test_one_bad_field_saves_nothing(client: Fixture, db_session: Session) -> No
 def test_required_field_cannot_be_cleared(client: Fixture, db_session: Session) -> None:
     c, _ = client
     make_attribute(db_session, key="test_me_required", validation={"required": True})
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_required": None})
+    resp = c.patch(ME_FIELDS, json={"test_me_required": None})
     assert resp.status_code == 422
 
 
@@ -312,7 +302,7 @@ def test_cannot_edit_someone_elses_record(client: Fixture, db_session: Session) 
     )
 
     # Alice saves her own shirt size: Bob's is untouched.
-    assert c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "L"}).status_code == 200
+    assert c.patch(ME_FIELDS, json={"test_me_shirt": "L"}).status_code == 200
     assert _value(db_session, seed.shirt, seed.alice) == "L"
     assert _value(db_session, seed.shirt, seed.bob) == "S"
 
@@ -322,12 +312,12 @@ def test_cannot_edit_someone_elses_record(client: Fixture, db_session: Session) 
         {"entity_id": seed.bob.id, "test_me_shirt": "M"},
         {"id": str(seed.bob.id), "test_me_shirt": "M"},
     ):
-        assert c.patch("/api/v1/me/custom-fields", json=body).status_code == 422
+        assert c.patch(ME_FIELDS, json=body).status_code == 422
     assert _value(db_session, seed.shirt, seed.bob) == "S"
     assert _value(db_session, seed.shirt, seed.alice) == "L"
 
 
-def test_get_me_never_shows_someone_elses_values(client: Fixture, db_session: Session) -> None:
+def test_get_never_shows_someone_elses_values(client: Fixture, db_session: Session) -> None:
     c, seed = client
     set_attribute_value(
         db_session,
@@ -337,7 +327,7 @@ def test_get_me_never_shows_someone_elses_values(client: Fixture, db_session: Se
         raw_value="bobs notes",
         recorded_by_membership_id=seed.m_bob.id,
     )
-    assert _fields(c.get("/api/v1/me").json())["test_me_notes"] is None
+    assert _fields(c.get(ME_FIELDS).json())["test_me_notes"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -366,7 +356,7 @@ def test_locked_fields_are_rejected(
     client: Fixture, db_session: Session, key: str, value: object
 ) -> None:
     c, seed = client
-    resp = c.patch("/api/v1/me/custom-fields", json={key: value, "test_me_shirt": "M"})
+    resp = c.patch(ME_FIELDS, json={key: value, "test_me_shirt": "M"})
     assert resp.status_code == 422
     assert key in resp.json()["detail"]
 
@@ -390,7 +380,7 @@ def test_membership_and_inactive_attributes_are_rejected(
     db_session.flush()
 
     for key in ("test_me_onboarded", "test_me_retired"):
-        assert c.patch("/api/v1/me/custom-fields", json={key: "x"}).status_code == 422
+        assert c.patch(ME_FIELDS, json={key: "x"}).status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +391,7 @@ def test_membership_and_inactive_attributes_are_rejected(
 def test_edit_is_audit_logged_without_values(client: Fixture, db_session: Session) -> None:
     c, seed = client
     c.patch(
-        "/api/v1/me/custom-fields",
+        ME_FIELDS,
         json={"test_me_shirt": "M", "test_me_notes": "very private"},
     )
 
@@ -418,9 +408,54 @@ def test_saving_unchanged_values_writes_no_audit_entry(
     client: Fixture, db_session: Session
 ) -> None:
     c, seed = client
-    c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "M"})
-    c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "M", "test_me_year": None})
+    c.patch(ME_FIELDS, json={"test_me_shirt": "M"})
+    c.patch(ME_FIELDS, json={"test_me_shirt": "M", "test_me_year": None})
     assert len(_audit_rows(db_session, seed.alice)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Position history (`/me/memberships`)
+# ---------------------------------------------------------------------------
+
+
+def test_history_lists_past_current_and_future_newest_first(
+    client: Fixture, db_session: Session
+) -> None:
+    c, seed = client
+    lc = make_lc(db_session, name="test-me-history-lc")
+    term = make_term(
+        db_session, name="test-me-history-term", start=date(2020, 1, 1), end=date(2030, 12, 31)
+    )
+    member = _member_position(db_session)
+    past = make_membership(
+        db_session,
+        person=seed.alice,
+        lc=lc,
+        position=member,
+        term=term,
+        start=date(2020, 1, 1),
+        end=date(2020, 12, 31),
+    )
+    future = make_membership(
+        db_session, person=seed.alice, lc=lc, position=member, term=term, start=date(2030, 1, 1)
+    )
+
+    resp = c.get(ME_HISTORY)
+    assert resp.status_code == 200
+    body = resp.json()
+    # Unlike `/me`, ended and not-yet-started memberships are listed too.
+    assert [m["id"] for m in body] == [str(future.id), str(seed.m_alice.id), str(past.id)]
+    assert body[2]["startDate"] == "2020-01-01"
+    assert body[2]["endDate"] == "2020-12-31"
+    assert body[1]["position"]["key"] == "member"
+    assert body[1]["lc"]["name"] == "test-me-lc"
+
+
+def test_history_never_shows_someone_elses_memberships(client: Fixture) -> None:
+    c, seed = client
+    ids = [m["id"] for m in c.get(ME_HISTORY).json()]
+    assert ids == [str(seed.m_alice.id)]
+    assert str(seed.m_bob.id) not in ids
 
 
 # ---------------------------------------------------------------------------
@@ -428,18 +463,19 @@ def test_saving_unchanged_values_writes_no_audit_entry(
 # ---------------------------------------------------------------------------
 
 
-def test_signed_out_gets_401(client: Fixture, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_signed_out_gets_401(client: Fixture) -> None:
     c, _ = client
     del app.dependency_overrides[get_current_actor]
-    monkeypatch.delenv("DEV_ACTOR_HEADER_ENABLED", raising=False)
-    assert c.get("/api/v1/me").status_code == 401
-    assert c.patch("/api/v1/me/custom-fields", json={}).status_code == 401
+    # No bearer token, so `get_current_user` turns the request away.
+    assert c.get(ME_FIELDS).status_code == 401
+    assert c.get(ME_HISTORY).status_code == 401
+    assert c.patch(ME_FIELDS, json={}).status_code == 401
 
 
 def test_unallocated_person_cannot_edit(client: Fixture, db_session: Session) -> None:
     c, seed = client
     app.dependency_overrides[get_current_actor] = lambda: _actor(seed.alice, None)
-    resp = c.patch("/api/v1/me/custom-fields", json={"test_me_shirt": "M"})
+    resp = c.patch(ME_FIELDS, json={"test_me_shirt": "M"})
     assert resp.status_code == 403
     count = db_session.execute(
         select(func.count())

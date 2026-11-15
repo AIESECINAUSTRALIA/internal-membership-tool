@@ -36,6 +36,8 @@ MC_POSITIONS: set[str] = {"mcd", "mcvp", "mcp"}
 ADMIN_POSITIONS: set[str] = {"admin"}
 PRESIDENTIAL_POSITIONS: set[str] = {"lcp", "mcp"}
 TEAM_HOLDING_POSITIONS: set[str] = {"member", "team_leader"}
+# Positions whose homepage chart covers their whole function in their LC.
+FUNCTION_SCOPE_POSITIONS: set[str] = {"lcvp", "lcp"}
 
 
 def position_level(position_key: str) -> Literal["lc", "mc"]:
@@ -44,6 +46,26 @@ def position_level(position_key: str) -> Literal["lc", "mc"]:
     Fallback until ticket 2 adds `position.level`, same pattern as `POSITION_RANKS`.
     """
     return "mc" if position_key in MC_POSITIONS else "lc"
+
+
+HomeChartScope = Literal["team", "function", "all"]
+
+
+def home_chart_scope(position_key: str) -> HomeChartScope:
+    """Whose data the homepage chart covers (Spec §2A.4, docs/home-chart.md):
+    Member and TL see their team, LCVP and LCP their function in their LC, MC
+    positions all LCs. Any other position (e.g. `admin`, or one added later)
+    gets `team`. Mirrors `homeChartScope` in the frontend seed.
+
+    Fallback until ticket 2 adds position columns, same pattern as `POSITION_RANKS`.
+    """
+    if position_key in MC_POSITIONS:
+        return "all"
+    if position_key in FUNCTION_SCOPE_POSITIONS:
+        return "function"
+    # Deliberately the narrowest scope: a position this rule doesn't know
+    # about should see less data, never more.
+    return "team"
 
 
 def scope_rank(scope: Scope) -> int:
@@ -121,10 +143,11 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
     )
 
 
-# LC management (spec §1.5, §2A.2) is org-wide configuration, so MC and admin
-# positions hold it at the widest scope.
+# LC and attribute-catalog management (spec §1.5, §2A.2) are org-wide configuration,
+# so MC and admin positions hold them at the widest scope.
 for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "attribute", "manage", "all"))
 
 
 @dataclass(frozen=True)
@@ -160,28 +183,6 @@ def resolve_widest_scope(
                 if widest is None or scope_rank(grant.scope) > scope_rank(widest):
                     widest = grant.scope
     return widest
-
-
-def resolve_all_grants(
-    actor_memberships: Sequence[MembershipContext],
-) -> list[tuple[str, Action, Scope]]:
-    """Every (resource, action, widest scope) the actor holds (Spec §2A.9, §3.2).
-
-    The Profile page lists these. It uses `resolve_widest_scope` for each pair, so
-    what Profile shows is exactly what the server enforces.
-    """
-    position_keys = {m.position_key for m in actor_memberships}
-    pairs = {
-        (grant.resource, grant.action)
-        for grant in BASELINE_PERMISSION_MATRIX
-        if grant.position_key in position_keys
-    }
-    grants: list[tuple[str, Action, Scope]] = []
-    for resource, action in sorted(pairs):
-        scope = resolve_widest_scope(actor_memberships, resource, action)
-        if scope is not None:
-            grants.append((resource, action, scope))
-    return grants
 
 
 def get_acting_membership(
@@ -277,6 +278,15 @@ def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
     hierarchy and self-action checks from `can_act_on_target` do not apply.
     """
     return resolve_widest_scope(actor_memberships, "lc", "manage") == "all"
+
+
+def can_manage_attribute(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, edit or retire KPIs and custom fields (spec §1.5, §4.2).
+
+    Needs `manage` on `attribute` at scope `all`. Like `can_manage_lc`, there is
+    no target person, so the hierarchy and self-action checks do not apply.
+    """
+    return resolve_widest_scope(actor_memberships, "attribute", "manage") == "all"
 
 
 def can_view_membership(
