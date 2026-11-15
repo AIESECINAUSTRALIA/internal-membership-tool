@@ -139,6 +139,7 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'admin_console', 'view', 'all'),
   row(positionKey, 'lc', 'manage', 'all'),
   row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'position', 'manage', 'all'), // spec §1.5, §2A.2: unified Positions & functions screen
   row(positionKey, 'attribute', 'manage', 'all'), // KPIs and custom fields (§1.5, §4.2)
   row(positionKey, 'audit_log', 'view', 'all'),
 ]

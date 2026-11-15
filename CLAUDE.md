@@ -71,6 +71,38 @@ Setup is commented `gcloud` scripts in `infra/`, not Terraform.
 - **CI**: `.github/workflows/{backend,frontend}.yml`, path-filtered per sub-project;
   same checks as above. Every PR must be green before merge.
 
+### Pre-push checklist (run these before opening or updating a PR)
+
+CI will reject the PR if any of these fail — catch them locally first.
+
+1. **`make lint`** — runs ruff + mypy on the backend and eslint + tsc on the
+   frontend. Fix every error before pushing. Auto-generated files (e.g. Alembic
+   migrations) are not exempt: ruff flags unused imports and old-style `Union`
+   annotations in them too — clean them up manually.
+
+2. **`make test`** — backend pytest + frontend vitest. A green lint with failing
+   tests still blocks the PR.
+
+3. **Alembic single head** — if you added a migration, run:
+   ```
+   make migrate   # or: docker compose run --rm backend uv run alembic heads
+   ```
+   There must be exactly **one** head. Two heads means your migration and one on
+   `main` both forked from the same parent (this happens after merging `main` into
+   your branch when both sides added a migration). Fix it with:
+   ```
+   docker compose run --rm backend uv run alembic merge heads -m "merge_<a>_and_<b>"
+   ```
+   Then clean the generated file (remove unused imports, use `X | Y` union syntax,
+   import `Sequence` from `collections.abc`), commit it, and re-run `make lint`.
+
+4. **No conflict markers** — after resolving a merge or rebase, grep for leftover
+   markers before committing:
+   ```
+   grep -rn "<<<<<<\|=======\|>>>>>>>" backend/ frontend/
+   ```
+   Stage every resolved file (`git add`) so git stops treating them as unmerged.
+
 ### Current state
 
 The backend serves `GET /` and `GET /healthz`, and has the initial relational schema

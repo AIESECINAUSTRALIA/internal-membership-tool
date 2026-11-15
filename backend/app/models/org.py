@@ -69,6 +69,11 @@ class Position(Base):
     key: Mapped[str] = mapped_column(String, unique=True, index=True)
     label: Mapped[str] = mapped_column(String)
     rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 'lc' or 'mc' — which kind of entity this position belongs to (spec §3.6).
+    # Nullable so rows added before this column existed are not broken.
+    level: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    # President exception (spec §3.4): LCP/MCP may add another holder of the same position.
+    can_add_same_rank: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 

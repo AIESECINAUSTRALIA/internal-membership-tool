@@ -42,12 +42,16 @@ import type {
   ActionResult,
   AddMemberInput,
   AddMemberResult,
+  AdminFunctionRow,
   AdminPersonQuery,
   AdminPersonRow,
+  AdminPositionRow,
   Api,
   CatalogAttribute,
   CreateAttributeInput,
+  CreateFunctionInput,
   CreateLcInput,
+  CreatePositionInput,
   CustomField,
   CustomFieldValue,
   HomeChart,
@@ -66,7 +70,9 @@ import type {
   ReferenceData,
   StateTimezone,
   UpdateAttributeInput,
+  UpdateFunctionInput,
   UpdateLcInput,
+  UpdatePositionInput,
 } from '../types'
 import { shortLabel } from '../../lib/labels'
 import { definitionProblem, KEY_PATTERN } from './attributeRules'
@@ -125,8 +131,24 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   const customFieldDefs = options.customFieldDefs ?? CUSTOM_FIELD_DEFS
 
   const db: MockDb = buildSeed(today())
-  // A copy, because LC management edits LCs and the seed constant is shared.
+  // Copies, because management screens edit these and seed constants are shared.
   const lcs: Lc[] = LCS.map((lc) => ({ ...lc }))
+  // Admin-screen rows carry numeric IDs (1-based index) and the full editable fields.
+  const adminPositions: AdminPositionRow[] = POSITIONS.map((p, i) => ({
+    id: i + 1,
+    key: p.key,
+    label: p.label,
+    level: p.level,
+    rank: p.rank,
+    canAddSameRank: p.canAddSameRank,
+    active: true,
+  }))
+  const adminFunctions: AdminFunctionRow[] = FUNCTIONS.map((f, i) => ({
+    id: i + 1,
+    key: f.key,
+    label: f.label,
+    active: f.active,
+  }))
   const attributes: DbAttribute[] = ATTRIBUTES.map(copyAttribute)
   let sessionPersonId: string | null = readSession()
   let nextId = 1000
@@ -664,6 +686,97 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
       const start = query.page * query.pageSize
       return { rows: rows.slice(start, start + query.pageSize), total: rows.length }
+    },
+
+    // ---- Admin console: Positions & functions (§1.5, §2A.2) -----------------
+
+    async listPositionsAdmin(): Promise<AdminPositionRow[]> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'position', 'manage')) return []
+      return adminPositions.map((p) => ({ ...p }))
+    },
+
+    async createPosition(input: CreatePositionInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'position', 'manage')) return reject("You don't have permission to manage positions.")
+      const label = input.label.trim()
+      if (!label) return reject('Enter a name for the position.')
+      if (adminPositions.some((p) => p.label.toLowerCase() === label.toLowerCase())) {
+        return reject('A position with that name already exists.')
+      }
+      const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'position'
+      adminPositions.push({
+        id: nextId++,
+        key,
+        label,
+        level: input.level ?? null,
+        rank: input.rank ?? null,
+        canAddSameRank: input.canAddSameRank ?? false,
+        active: true,
+      })
+      return { status: 'ok' }
+    },
+
+    async updatePosition(positionId: number, changes: UpdatePositionInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'position', 'manage')) return reject("You don't have permission to manage positions.")
+      const pos = adminPositions.find((p) => p.id === positionId)
+      if (!pos) return reject('That position no longer exists.')
+      if (changes.label !== undefined) {
+        const label = changes.label.trim()
+        if (!label) return reject('Enter a name for the position.')
+        if (adminPositions.some((p) => p.id !== positionId && p.label.toLowerCase() === label.toLowerCase())) {
+          return reject('A position with that name already exists.')
+        }
+        pos.label = label
+      }
+      if (changes.level !== undefined) pos.level = changes.level
+      if (changes.rank !== undefined) pos.rank = changes.rank
+      if (changes.canAddSameRank !== undefined) pos.canAddSameRank = changes.canAddSameRank
+      if (changes.active !== undefined) pos.active = changes.active
+      return { status: 'ok' }
+    },
+
+    async listFunctionsAdmin(): Promise<AdminFunctionRow[]> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'function', 'manage')) return []
+      return adminFunctions.map((f) => ({ ...f }))
+    },
+
+    async createFunction(input: CreateFunctionInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'function', 'manage')) return reject("You don't have permission to manage functions.")
+      const label = input.label.trim()
+      if (!label) return reject('Enter a name for the function.')
+      if (adminFunctions.some((f) => f.label.toLowerCase() === label.toLowerCase())) {
+        return reject('A function with that name already exists.')
+      }
+      const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'function'
+      adminFunctions.push({ id: nextId++, key, label, active: true })
+      return { status: 'ok' }
+    },
+
+    async updateFunction(functionId: number, changes: UpdateFunctionInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'function', 'manage')) return reject("You don't have permission to manage functions.")
+      const func = adminFunctions.find((f) => f.id === functionId)
+      if (!func) return reject('That function no longer exists.')
+      if (changes.label !== undefined) {
+        const label = changes.label.trim()
+        if (!label) return reject('Enter a name for the function.')
+        if (adminFunctions.some((f) => f.id !== functionId && f.label.toLowerCase() === label.toLowerCase())) {
+          return reject('A function with that name already exists.')
+        }
+        func.label = label
+      }
+      if (changes.active !== undefined) func.active = changes.active
+      return { status: 'ok' }
     },
 
     // ---- Admin console: Metrics & custom fields (§1.5, §4.2) ----------------
