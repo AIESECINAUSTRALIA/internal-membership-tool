@@ -8,6 +8,7 @@ import { RedirectIfSignedInAdmin, RequireAdminConsole } from './guards'
 import { AdminAuditingPage } from './pages/AdminAuditingPage'
 import { AdminLcsPage } from './pages/AdminLcsPage'
 import { AdminPeoplePage } from './pages/AdminPeoplePage'
+import { AdminPositionsFunctionsPage } from './pages/AdminPositionsFunctionsPage'
 
 const notAvailable = (
   <PageMessage title="Page not available">You don&rsquo;t have access to this screen.</PageMessage>
@@ -37,6 +38,9 @@ export function AdminApp() {
           </Route>
           <Route element={<RequirePermission resource="person" action="manage" fallback={notAvailable} />}>
             <Route path="people" element={<AdminPeoplePage />} />
+          </Route>
+          <Route element={<RequirePermission resource="position" action="manage" fallback={notAvailable} />}>
+            <Route path="positions-functions" element={<AdminPositionsFunctionsPage />} />
           </Route>
           <Route element={<RequirePermission resource="audit_log" action="view" fallback={notAvailable} />}>
             <Route path="auditing" element={<AdminAuditingPage />} />

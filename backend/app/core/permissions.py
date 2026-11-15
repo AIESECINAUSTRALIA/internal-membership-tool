@@ -126,6 +126,14 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
 for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
 
+# Position management (spec §1.5, §2A.2): Admin console only.
+# MC positions can ALSO manage functions via Settings (spec §2A.8), and are
+# already granted `function:manage` above. `position:manage` is added here too
+# so the Admin console's unified Positions & functions screen is accessible to
+# MC positions (consistent with lc:manage and person:manage above).
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "position", "manage", "all"))
+
 
 @dataclass(frozen=True)
 class MembershipContext:
@@ -246,6 +254,16 @@ def can_act_on_target(
 
     # Check 2: Rank hierarchy (strictly below)
     return target.position_rank < acting.position_rank
+
+
+def can_manage_position(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, deactivate, or edit rank/level/can_add_same_rank on positions (spec §1.5, §2A.2)."""
+    return resolve_widest_scope(actor_memberships, "position", "manage") == "all"
+
+
+def can_manage_function(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, or deactivate functions (spec §1.5, §2A.2, §2A.8)."""
+    return resolve_widest_scope(actor_memberships, "function", "manage") == "all"
 
 
 def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
