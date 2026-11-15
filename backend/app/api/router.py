@@ -1,6 +1,7 @@
 """Top-level API router mounting all versioned sub-routers."""
 
 from fastapi import APIRouter
+
 from app.api.v1 import attributes, auth, home, lcs, me, members, positions_functions, reference
 
 api_router = APIRouter(prefix="/api/v1")

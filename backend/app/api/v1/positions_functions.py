@@ -53,7 +53,10 @@ def _require_position_manager(
 ) -> CurrentActor:
     contexts = [build_membership_context(db, m) for m in actor.active_memberships]
     if not can_manage_position(contexts):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to manage positions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage positions",
+        )
     return actor
 
 
@@ -63,7 +66,10 @@ def _require_function_manager(
 ) -> CurrentActor:
     contexts = [build_membership_context(db, m) for m in actor.active_memberships]
     if not can_manage_function(contexts):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You do not have permission to manage functions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to manage functions",
+        )
     return actor
 
 

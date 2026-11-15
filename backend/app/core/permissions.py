@@ -280,7 +280,7 @@ def can_act_on_target(
 
 
 def can_manage_position(actor_memberships: Sequence[MembershipContext]) -> bool:
-    """Add, rename, deactivate, or edit rank/level/can_add_same_rank on positions (spec §1.5, §2A.2)."""
+    """Add, rename, deactivate, or edit rank/level/can_add_same_rank on positions (§1.5, §2A.2)."""
     return resolve_widest_scope(actor_memberships, "position", "manage") == "all"
 
 
