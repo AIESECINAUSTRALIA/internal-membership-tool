@@ -97,8 +97,8 @@ describe('hasMinScope', () => {
 
 describe('allocation', () => {
   it('treats a person whose term has ended as not allocated', async () => {
-    const { me } = await signInAs('unallocated')
-    expect(me.memberships.length).toBeGreaterThan(0) // history exists...
+    const { api, me } = await signInAs('unallocated')
+    expect((await api.getMyMembershipHistory()).length).toBeGreaterThan(0) // history exists...
     expect(hasActiveMembership(me, TODAY)).toBe(false) // ...but none is active
   })
 

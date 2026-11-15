@@ -104,7 +104,6 @@ describe('meFromResponse', () => {
       firstName: 'Ada',
       lastName: 'King Lovelace',
       email: 'ada@aiesec.net',
-      customFields: [],
     })
     expect(me.memberships).toEqual([
       {
@@ -149,7 +148,7 @@ describe('meFromResponse', () => {
 
   it('still returns a person, with no memberships, when the email matched nobody', () => {
     const me = meFromResponse(NO_PERSON, POSITIONS)
-    expect(me.person).toEqual({ id: '', firstName: 'new', lastName: '', email: 'new@aiesec.net', customFields: [] })
+    expect(me.person).toEqual({ id: '', firstName: 'new', lastName: '', email: 'new@aiesec.net' })
     expect(me.memberships).toEqual([])
   })
 })

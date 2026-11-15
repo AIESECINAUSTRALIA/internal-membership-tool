@@ -108,9 +108,8 @@ export function meFromResponse(body: MeResponse, positions: Position[]): Me {
           firstName: body.person.preferred_name ?? firstWord,
           lastName: rest.join(' '),
           email: body.person.aiesec_email,
-          customFields: [],
         }
-      : { id: '', firstName: body.email.split('@')[0], lastName: '', email: body.email, customFields: [] },
+      : { id: '', firstName: body.email.split('@')[0], lastName: '', email: body.email },
     memberships: body.memberships.map((m): MembershipView => {
       const lc: Lc = {id: String(m.lc.id), name: m.lc.name, type: m.lc.type === 'MC' ? 'mc' : 'lc', state: m.lc.state, active: m.lc.active,}
       const fn: FunctionRef | null = m.function ? { key: m.function.key, label: m.function.label } : null
