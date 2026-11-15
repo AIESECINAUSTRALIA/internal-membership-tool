@@ -25,6 +25,7 @@ from app.core.permissions import (
     can_move_to_team,
     can_view_membership,
     get_acting_membership,
+    home_chart_scope,
     position_level,
     resolve_widest_scope,
 )
@@ -243,9 +244,7 @@ def list_members_summary(
                         "canAddSameRank": getattr(pos, "can_add_same_rank", False)
                         or (pos_key in {"lcp", "mcp"}),
                         "presidential": pos_key in {"lcp", "mcp"},
-                        "homeChartScope": "all"
-                        if primary_lc and primary_lc.type.value == "MC"
-                        else "team",
+                        "homeChartScope": home_chart_scope(pos_key),
                         "holdsTeam": pos_key in {"member", "team_leader"},
                     },
                     "function": {"key": fn.key, "label": fn.label} if fn else None,
@@ -670,7 +669,7 @@ def get_membership_detail(
             "canAddSameRank": getattr(pos, "can_add_same_rank", False)
             or (pos_key in {"lcp", "mcp"}),
             "presidential": pos_key in {"lcp", "mcp"},
-            "homeChartScope": "all" if lc and lc.type.value == "MC" else "team",
+            "homeChartScope": home_chart_scope(pos_key),
             "holdsTeam": pos_key in {"member", "team_leader"},
         },
         "function": {"key": func.key, "label": func.label} if func else None,

@@ -53,6 +53,9 @@ interface Props {
  * editable fields are a child component keyed by `roleId` — switching memberships
  * remounts it with fresh state instead of needing an effect to reset five fields by hand.
  */
+/** Shown in place of "Loading…" when the membership's details could not be fetched. */
+const LOAD_ERROR = 'Could not load this membership. Close and try again.'
+
 export function ManageMembershipPanel({ row, teamEligibleRoleIds, termEligibleRoleIds, canAddFunction, onClose, onDone, onAddFunction }: Props) {
   const roleIds = [...new Set([...teamEligibleRoleIds, ...termEligibleRoleIds])]
   const [roleId, setRoleId] = useState(roleIds[0])
@@ -105,14 +108,19 @@ function MembershipFields({
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const fetchDetail = () =>
-    api.getMembershipDetail(roleId).then((loaded) => {
-      setDetail(loaded)
-      // The date field starts at the current end date, so editing it reads as "change
-      // this" rather than "you must pick a fresh date" (a later date is still required).
-      setNewEnd(loaded.endDate ? dayjs(loaded.endDate) : null)
-    })
+    api.getMembershipDetail(roleId).then(
+      (loaded) => {
+        setLoadError(null)
+        setDetail(loaded)
+        // The date field starts at the current end date, so editing it reads as "change
+        // this" rather than "you must pick a fresh date" (a later date is still required).
+        setNewEnd(loaded.endDate ? dayjs(loaded.endDate) : null)
+      },
+      () => setLoadError(LOAD_ERROR),
+    )
 
   useEffect(() => {
     void fetchDetail()
@@ -185,7 +193,11 @@ function MembershipFields({
             )}
 
             {!detail ? (
-              <Typography color="text.secondary">Loading…</Typography>
+              loadError ? (
+                <Alert severity="error">{loadError}</Alert>
+              ) : (
+                <Typography color="text.secondary">Loading…</Typography>
+              )
             ) : (
               <>
                 {canEditTeam && (

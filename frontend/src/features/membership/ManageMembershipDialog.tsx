@@ -20,6 +20,9 @@ interface Props {
   onDone: (message: string) => void
 }
 
+/** Shown in place of "Loading…" when the membership's details could not be fetched. */
+const LOAD_ERROR = 'Could not load this membership. Close and try again.'
+
 const TEXT = {
   extend: { title: 'Extend term', done: 'Term extended' },
   move: { title: 'Move to team', done: 'Moved to team' },
@@ -41,12 +44,20 @@ export function ManageMembershipDialog({ kind, row, eligibleRoleIds, onClose, on
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [serverError, setServerError] = useState<string | null>(null)
+  // Which membership failed to load, so picking another one clears the error.
+  const [failedRoleId, setFailedRoleId] = useState<string | null>(null)
+  const loadError = failedRoleId === roleId ? LOAD_ERROR : null
 
   useEffect(() => {
     let cancelled = false
-    api.getMembershipDetail(roleId).then((detail) => {
-      if (!cancelled) setLoaded(detail)
-    })
+    api.getMembershipDetail(roleId).then(
+      (detail) => {
+        if (!cancelled) setLoaded(detail)
+      },
+      () => {
+        if (!cancelled) setFailedRoleId(roleId)
+      },
+    )
     return () => {
       cancelled = true
     }
@@ -94,6 +105,7 @@ export function ManageMembershipDialog({ kind, row, eligibleRoleIds, onClose, on
         <DialogContent>
           <Stack spacing={2.5} sx={{ pt: 1 }}>
             <Typography>{personName}</Typography>
+            {loadError && <Alert severity="error">{loadError}</Alert>}
             {eligibleRoleIds.length > 1 && (
               <TextField select label="Membership" value={roleId} onChange={(e) => { setRoleId(e.target.value); setTeamId(''); setNewEnd(null); setSubmitted(false) }} fullWidth>
                 {eligibleRoleIds.map((id) => {
@@ -105,7 +117,7 @@ export function ManageMembershipDialog({ kind, row, eligibleRoleIds, onClose, on
             {kind === 'extend' && (
               <>
                 <Typography color="text.secondary">
-                  {detail ? `${roleText} ends on ${formatDate(detail.endDate)}.` : 'Loading…'}
+                  {detail ? `${roleText} ends on ${formatDate(detail.endDate)}.` : loadError ? null : 'Loading…'}
                 </Typography>
                 <DatePicker
                   label="New end date"
@@ -120,7 +132,7 @@ export function ManageMembershipDialog({ kind, row, eligibleRoleIds, onClose, on
             {kind === 'move' && (
               <>
                 <Typography color="text.secondary">
-                  {detail ? `Current team: ${detail.currentTeam?.name ?? 'No team'}.` : 'Loading…'}
+                  {detail ? `Current team: ${detail.currentTeam?.name ?? 'No team'}.` : loadError ? null : 'Loading…'}
                 </Typography>
                 {detail && detail.teamOptions.length === 0 ? (
                   <Alert severity="info">There are no other teams in this LC and function to move them to.</Alert>

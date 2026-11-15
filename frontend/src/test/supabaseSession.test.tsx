@@ -12,6 +12,7 @@ import { AppProviders } from '../AppProviders'
 import { createMockApi } from '../api/mock/mockApi'
 import { POSITIONS } from '../api/mock/seed'
 import {
+  bearerFrom,
   meFromResponse,
   SignInRejectedError,
   withSupabaseSession,
@@ -157,6 +158,16 @@ describe('meFromResponse', () => {
 // withSupabaseSession
 // ---------------------------------------------------------------------------
 
+describe('bearerFrom', () => {
+  it('returns an Authorization header from the current session token', async () => {
+    expect(await bearerFrom(fakeAuth('tok-1').auth)()).toEqual({ Authorization: 'Bearer tok-1' })
+  })
+
+  it('returns no headers when signed out', async () => {
+    expect(await bearerFrom(fakeAuth(null).auth)()).toEqual({})
+  })
+})
+
 describe('withSupabaseSession', () => {
   it('says it signs in with Google', () => {
     expect(build().api.signInMethod).toBe('google')
@@ -176,6 +187,27 @@ describe('withSupabaseSession', () => {
       headers: { Authorization: 'Bearer tok-1' },
     })
     expect(me?.person.email).toBe('ada@aiesec.net')
+  })
+
+  it('takes positions from getPositions, so sign-in never depends on reference data', async () => {
+    // In supabase mode `base` is the HTTP Api, whose getReferenceData calls the backend.
+    // A failure there must not stop someone signing in.
+    const fake = fakeAuth('tok-1')
+    const base = {
+      ...createMockApi({ latencyMs: 0 }),
+      getReferenceData: vi.fn(() => Promise.reject(new Error('GET /api/v1/reference → 500'))),
+    }
+    const api = withSupabaseSession(base, {
+      auth: fake.auth,
+      apiUrl: 'http://api.test/',
+      fetch: vi.fn(async () => json(200, ACTIVE_LCVP)),
+      getPositions: async () => POSITIONS,
+    })
+
+    const me = await api.getMe()
+
+    expect(me?.memberships[0].position.key).toBe(ACTIVE_LCVP.memberships[0].position.key)
+    expect(base.getReferenceData).not.toHaveBeenCalled()
   })
 
   it('signs out and returns null on 401 (expired session goes back to sign-in)', async () => {

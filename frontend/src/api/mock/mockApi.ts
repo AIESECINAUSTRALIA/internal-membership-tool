@@ -47,6 +47,8 @@ import type {
   AdminPersonRow,
   AdminPositionRow,
   Api,
+  CatalogAttribute,
+  CreateAttributeInput,
   CreateFunctionInput,
   CreateLcInput,
   CreatePositionInput,
@@ -67,12 +69,15 @@ import type {
   Position,
   ReferenceData,
   StateTimezone,
+  UpdateAttributeInput,
   UpdateFunctionInput,
   UpdateLcInput,
   UpdatePositionInput,
 } from '../types'
 import { shortLabel } from '../../lib/labels'
+import { definitionProblem, KEY_PATTERN } from './attributeRules'
 import {
+  ATTRIBUTES,
   buildSeed,
   buildTerms,
   CUSTOM_FIELD_DEFS,
@@ -83,6 +88,7 @@ import {
   PERSONAS,
   POSITIONS,
   TEAMS,
+  type DbAttribute,
   type DbMembership,
   type MockDb,
   type PersonaKey,
@@ -102,6 +108,21 @@ export interface MockApiOptions {
 }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/** A deep-enough copy: the arrays and validation object are edited in place otherwise. */
+function copyAttribute(attribute: DbAttribute): DbAttribute {
+  return {
+    ...attribute,
+    enumOptions: attribute.enumOptions && [...attribute.enumOptions],
+    validation: attribute.validation && { ...attribute.validation },
+    recorded: [...attribute.recorded],
+  }
+}
+
+function toCatalogAttribute(attribute: DbAttribute): CatalogAttribute {
+  const { recorded, ...rest } = copyAttribute(attribute)
+  return { ...rest, inUse: recorded.length > 0 }
+}
 
 export function createMockApi(options: MockApiOptions = {}): Api {
   const latencyMs = options.latencyMs ?? 150
@@ -128,6 +149,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     label: f.label,
     active: f.active,
   }))
+  const attributes: DbAttribute[] = ATTRIBUTES.map(copyAttribute)
   let sessionPersonId: string | null = readSession()
   let nextId = 1000
 
@@ -515,7 +537,14 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         : scope === 'function' ? (acting?.function ? shortLabel(acting.function.label) : 'your function')
         : 'All LCs'
       // No KPI catalog yet (spec §4.3 TODO), so there is nothing to plot: "No data exists".
-      return { scope, title: `Monthly activity, ${where}`, period: 'monthly', points: [] }
+      return {
+        scope,
+        kpi: null,
+        availableKpis: [],
+        title: `Monthly activity, ${where}`,
+        period: 'monthly',
+        points: [],
+      }
     },
 
     // ---- Admin console: LCs (§1.5, §2A.2) -----------------------------------
@@ -730,6 +759,65 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         func.label = label
       }
       if (changes.active !== undefined) func.active = changes.active
+      return { status: 'ok' }
+    },
+
+    // ---- Admin console: Metrics & custom fields (§1.5, §4.2) ----------------
+    // Same rules as the backend: needs `manage` on `attribute`, key and applies-to are
+    // fixed at creation, the data type is locked once values exist, an enum option still
+    // in use can't be removed, and there is no hard delete.
+
+    async listAttributes(): Promise<CatalogAttribute[]> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'attribute', 'manage')) return []
+      return attributes.map(toCatalogAttribute)
+    },
+
+    async createAttribute(input: CreateAttributeInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'attribute', 'manage')) return reject("You can't manage metrics or custom fields.")
+      if (!KEY_PATTERN.test(input.key)) {
+        return reject('Key must start with a lowercase letter and use only a-z, 0-9 and _')
+      }
+      if (attributes.some((a) => a.key === input.key)) return reject('An attribute with that key already exists.')
+      const problem = definitionProblem(input)
+      if (problem) return reject(problem)
+      if (input.functionKey !== null && !FUNCTIONS.some((f) => f.key === input.functionKey)) {
+        return reject('Choose a valid function.')
+      }
+      attributes.push(
+        copyAttribute({ ...input, label: input.label.trim(), id: `attr-new-${nextId++}`, active: true, recorded: [] }),
+      )
+      return { status: 'ok' }
+    },
+
+    async updateAttribute(attributeId: string, changes: UpdateAttributeInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'attribute', 'manage')) return reject("You can't manage metrics or custom fields.")
+      const attribute = attributes.find((a) => a.id === attributeId)
+      if (!attribute) return reject('That attribute no longer exists.')
+
+      const next = copyAttribute({ ...attribute, ...changes, label: (changes.label ?? attribute.label).trim() })
+      const problem = definitionProblem(next)
+      if (problem) return reject(problem)
+      if (next.functionKey !== attribute.functionKey && next.functionKey !== null) {
+        if (!FUNCTIONS.some((f) => f.key === next.functionKey)) return reject('Choose a valid function.')
+      }
+      if (next.dataType !== attribute.dataType && attribute.recorded.length > 0) {
+        return reject(
+          "The data type can't change once values have been recorded. Retire this attribute and add a new one instead.",
+        )
+      }
+      const kept = new Set(next.enumOptions ?? [])
+      const stillUsed = (attribute.enumOptions ?? []).filter(
+        (option) => !kept.has(option) && attribute.recorded.includes(option),
+      )
+      if (stillUsed.length) return reject(`Still in use, can't remove: ${stillUsed.sort().join(', ')}`)
+
+      Object.assign(attribute, next)
       return { status: 'ok' }
     },
   }

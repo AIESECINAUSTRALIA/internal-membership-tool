@@ -130,6 +130,21 @@ which return 401 when the email matches no person. A development stub that trust
 `X-Actor-Email` header (in the DEV-0042 branch) must not come back; a test checks the
 header alone gets a 401.
 
+**How the frontend's data calls are signed (DEV-0043).** In `supabase` mode the real data
+calls (`frontend/src/api/http/httpApi.ts`: the membership summary methods and
+`GET /api/v1/reference/membership-options`) send the Supabase access token as
+`Authorization: Bearer …`, read fresh from the session before every request
+(`bearerFrom` in `api/supabaseSession.ts`). `httpApi.ts` itself knows nothing about
+Supabase: it takes a `getAuthHeaders()` function, so the EXPA cookie session can pass `{}`
+later without changing it. In `mock` mode the frontend never calls the backend, because the
+backend has no way to trust a mock persona.
+
+`GET /api/v1/reference/membership-options` needs a caller who matches one of our people
+(`CurrentActor`): any aiesec.net account worldwide can sign in, so an account that isn't
+ours must not see our teams or their leaders' names. Signing in never depends on it:
+`getMe` takes positions from the mock (`getPositions` in `index.ts`), so an unallocated
+person still reaches the not-allocated page.
+
 **Session expiry.** Supabase refreshes the token in the background. If refreshing fails or
 the backend answers 401, the frontend signs out locally and the guards send the person to
 `/sign-in`. There is no separate "session expired" page (spec §9).
