@@ -128,6 +128,23 @@ to a person only indirectly, through `membership`.
   it's structural to how the app behaves (e.g. an `ANONYMISED` person can no
   longer authenticate), so it's a constrained column (enforced by a `CHECK`
   constraint, not just at the Python/ORM level) rather than a lookup table.
+- **Deactivating** a person (Admin console → People, DEV-47) sets `status =
+  INACTIVE`. It never deletes a row. What it does:
+  - An `INACTIVE` person can't sign in. `get_current_person` treats them like an
+    `ANONYMISED` one, as "no match" (`docs/auth.md`).
+  - Each membership active today ends **yesterday**, so it stops giving access now.
+    One that only started today can't end before it began, so it ends today. Their
+    `team_member` rows are cut to the same date, and each end is audit-logged.
+  - Memberships that haven't started yet are left alone. Being `INACTIVE` already
+    blocks the access they'd give, and a reactivation keeps them.
+  - `membership`, `team_member` and `kpi_record` rows all stay, so past totals and
+    reports don't change (spec §1.5). `backend/tests/test_admin_people_api.py`
+    checks the row counts before and after.
+
+  **Reactivate** sets the status back to `ACTIVE` and doesn't restore ended
+  memberships: they are history, so the admin assigns a new one. The main app's
+  Add member refuses an `INACTIVE` person ("Contact your MC"), so only Reactivate
+  can undo a deactivation.
 - `anonymised_at` is set when a deletion request results in anonymisation
   (spec §8.2). The actual deletion-request workflow is a separate ticket;
   this column exists now because it's part of the `person` table's shape per
@@ -154,7 +171,17 @@ Instead, "is this membership current" is answered by a query:
 start_date <= :as_of AND (end_date IS NULL OR end_date >= :as_of)
 ```
 
-implemented in
+**The one exception is a correction.** The Admin console's Memberships screen can
+*correct* a membership's position, function or dates in place (spec §2A.2,
+`repositories/admin_people.py::correct_membership`). That is only for fixing a
+data-entry mistake, so the row shows what should have been recorded. The audit
+entry (`membership.correct`) keeps the before and after of each changed field, so
+the original is still on record. A real change of role still uses end + insert. The
+LC can't be corrected: moving someone to another LC is a transfer. A function can't
+be corrected once the membership has been in a team, because the team belongs to
+the old function. End it and assign a new one instead.
+
+"Is it current" is implemented in
 `backend/app/repositories/membership.py::get_active_memberships_for_person`.
 A person can have **more than one** concurrent `membership` row (e.g. Team
 Leader in one function, ordinary Member in another) — the repository
@@ -542,7 +569,13 @@ rather than constructing rows directly — and for the catalog itself
 (`list_attributes`, `create_attribute`, `update_attribute`,
 `deactivate_attribute`, `activate_attribute`; see "Editing the catalog").
 `backend/app/repositories/person.py` reads and edits the signed-in person's own
-custom fields and lists their position history (see "Editing your own custom fields" above). `backend/app/repositories/kpi.py`
+custom fields and lists their position history (see "Editing your own custom fields" above).
+`backend/app/repositories/admin_people.py` is the Admin console's People and
+Memberships screens (DEV-47): add, edit, deactivate and reactivate people; list,
+assign, correct and end memberships. It shares the overlap, MC→LC and transfer
+rules with the main app's Add member through `membership_conflict` and
+`end_memberships_in_other_lcs` in `membership.py`, so the two can't drift apart.
+`backend/app/repositories/kpi.py`
 is the write path and rollup query for `kpi_record` (`record_kpi`,
 `sum_by_function`). As more tickets add read patterns (e.g. "all memberships
 for an LC", "who leads this team"), add functions to the relevant file

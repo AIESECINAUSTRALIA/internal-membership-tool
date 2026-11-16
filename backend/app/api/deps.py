@@ -83,11 +83,13 @@ def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
     """The `person` whose `aiesec_email` matches the signed-in email (spec §9).
 
     None when nobody matches. An ANONYMISED person also counts as no match: after a
-    deletion request their record must never sign anyone in again (spec §8).
+    deletion request their record must never sign anyone in again (spec §8). So does
+    an INACTIVE one: an admin deactivated them (Admin console, DEV-47), and they lose
+    access straight away rather than when their memberships' dates run out.
     """
     stmt = select(Person).where(
         func.lower(Person.aiesec_email) == user.email,
-        Person.status != PersonStatus.ANONYMISED,
+        Person.status.not_in([PersonStatus.ANONYMISED, PersonStatus.INACTIVE]),
     )
     return db.execute(stmt).scalars().first()
 

@@ -139,6 +139,7 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'admin_console', 'view', 'all'),
   row(positionKey, 'lc', 'manage', 'all'),
   row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'membership', 'manage', 'all'), // admin Memberships screen (DEV-47)
   row(positionKey, 'attribute', 'manage', 'all'), // KPIs and custom fields (§1.5, §4.2)
   row(positionKey, 'audit_log', 'view', 'all'),
 ]
@@ -199,6 +200,8 @@ export interface DbPerson {
   lastName: string
   email: string
   customFields: Record<string, string | number | boolean | null>
+  /** `person.status`. Left out means 'active'; 'inactive' = deactivated (DEV-47). */
+  status?: 'active' | 'inactive'
 }
 
 export interface DbMembership {

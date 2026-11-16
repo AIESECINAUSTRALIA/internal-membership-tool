@@ -123,6 +123,117 @@ def _resolve_term_id(session: Session, term_id: int | None, start_date: date) ->
     return session.execute(stmt).scalar_one_or_none()
 
 
+def membership_conflict(
+    session: Session,
+    *,
+    person_id: int,
+    lc: LC,
+    function_id: int | None,
+    start_date: date,
+    end_date: date,
+    ignore_membership_id: int | None = None,
+) -> str | None:
+    """Why `person_id` can't hold a membership in `lc` for these dates, or None.
+
+    Shared by the Membership summary's Add member and the Admin console, so both
+    apply the same two rules:
+
+    - Spec §3.6: no LC membership while an MC membership overlaps the dates. The
+      message is generic on purpose and does not say why.
+    - Spec §5.1: the same function can't be held twice in one LC with overlapping
+      dates.
+
+    `ignore_membership_id` leaves out the membership being corrected, so it isn't
+    compared with itself.
+    """
+    theirs = [
+        m
+        for m in session.execute(select(Membership).where(Membership.person_id == person_id))
+        .scalars()
+        .all()
+        if m.id != ignore_membership_id
+    ]
+
+    def overlaps(m: Membership) -> bool:
+        return m.start_date <= end_date and (m.end_date is None or m.end_date >= start_date)
+
+    if lc.type.value == "LC":
+        for m in theirs:
+            m_lc = session.get(LC, m.lc_id)
+            if m_lc and m_lc.type.value == "MC" and overlaps(m):
+                return "This person can't be added. Contact your MC."
+
+    if function_id is not None:
+        for m in theirs:
+            if m.lc_id == lc.id and m.function_id == function_id and overlaps(m):
+                return "This person already holds that function in this LC for overlapping dates."
+    return None
+
+
+def end_memberships_in_other_lcs(
+    session: Session,
+    *,
+    person_id: int,
+    lc_id: int,
+    start_date: date,
+    end_date: date,
+    audit_actor: dict[str, int | None],
+) -> None:
+    """Transfer rule (spec §5.1, §3.6): a new membership in `lc_id` ends the person's
+    memberships in every other LC on the day before it starts.
+
+    A membership that started on or after that day can't end before it began, so it
+    ends on its own start date instead. Each one gets its own audit entry (§8.4).
+    """
+    theirs = (
+        session.execute(
+            select(Membership).where(
+                Membership.person_id == person_id,
+                Membership.lc_id != lc_id,
+                Membership.start_date <= end_date,
+                or_(Membership.end_date.is_(None), Membership.end_date >= start_date),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    day_before = start_date - timedelta(days=1)
+    for old_m in theirs:
+        old_end = old_m.end_date
+        new_end = day_before if day_before >= old_m.start_date else old_m.start_date
+        old_m.end_date = new_end
+        session.flush()
+
+        record_audit(
+            session,
+            action="membership.end_term",
+            resource_type="membership",
+            resource_id=old_m.id,
+            summary="Membership ended automatically due to transfer to another LC",
+            **audit_actor,
+            diff={"before": str(old_end), "after": str(new_end)},
+        )
+
+
+def end_team_rows(session: Session, *, membership_id: int, end_date: date) -> None:
+    """Keep a membership's `team_member` rows inside its dates once it ends earlier.
+
+    A team row that would outlast the membership is cut to the same end date, so
+    nobody stays "in a team" after their membership is over. Rows that already
+    ended earlier are left alone (they are history).
+    """
+    rows = session.execute(
+        select(TeamMember).where(
+            TeamMember.membership_id == membership_id,
+            or_(TeamMember.end_date.is_(None), TeamMember.end_date > end_date),
+        )
+    ).scalars()
+    for row in rows:
+        row.end_date = max(end_date, row.start_date)
+    session.flush()
+
+
 def build_membership_context(session: Session, membership: Membership) -> MembershipContext:
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
@@ -399,51 +510,29 @@ def add_member(
         select(Person).where(Person.aiesec_email == clean_email)
     ).scalar_one_or_none()
 
+    # A deactivated person comes back only through the Admin console's Reactivate,
+    # so a deactivation can't be undone by accident from the main app (DEV-47).
+    if person is not None and person.status == PersonStatus.INACTIVE:
+        return {"status": "rejected", "message": "This person can't be added. Contact your MC."}
+
     if person is None:
         if not first_name or not last_name or not first_name.strip() or not last_name.strip():
             return {"status": "needs_name"}
     elif not confirmed_existing:
         return {"status": "confirm_existing"}
 
-    # Validate target against active memberships
+    # Validate target against their other memberships (spec §3.6, §5.1)
     if person is not None:
-        theirs = (
-            session.execute(select(Membership).where(Membership.person_id == person.id))
-            .scalars()
-            .all()
+        conflict = membership_conflict(
+            session,
+            person_id=person.id,
+            lc=lc,
+            function_id=func.id if func else None,
+            start_date=start_date,
+            end_date=end_date,
         )
-
-        # Spec §3.6: Adding to LC while holding active overlapping MC membership is blocked
-        for m in theirs:
-            m_lc = session.get(LC, m.lc_id)
-            if (
-                m_lc
-                and m_lc.type.value == "MC"
-                and lc.type.value == "LC"
-                and m.start_date <= end_date
-                and (m.end_date is None or m.end_date >= start_date)
-            ):
-                return {
-                    "status": "rejected",
-                    "message": "This person can't be added. Contact your MC.",
-                }
-
-        # Check overlapping duplicate function in same LC
-        if func:
-            for m in theirs:
-                if (
-                    m.lc_id == lc.id
-                    and m.function_id == func.id
-                    and m.start_date <= end_date
-                    and (m.end_date is None or m.end_date >= start_date)
-                ):
-                    return {
-                        "status": "rejected",
-                        "message": (
-                            "This person already holds that function "
-                            "in this LC for overlapping dates."
-                        ),
-                    }
+        if conflict is not None:
+            return {"status": "rejected", "message": conflict}
 
     # Create person if new
     if person is None:
@@ -460,35 +549,14 @@ def add_member(
         session.flush()
     else:
         # Transfer logic (§5.1): End active memberships in other LCs to start_date - 1 day
-        theirs = (
-            session.execute(
-                select(Membership).where(
-                    Membership.person_id == person.id,
-                    Membership.lc_id != lc.id,
-                    Membership.start_date <= end_date,
-                    or_(Membership.end_date.is_(None), Membership.end_date >= start_date),
-                )
-            )
-            .scalars()
-            .all()
+        end_memberships_in_other_lcs(
+            session,
+            person_id=person.id,
+            lc_id=lc.id,
+            start_date=start_date,
+            end_date=end_date,
+            audit_actor=_audit_actor(actor_memberships),
         )
-
-        day_before = start_date - timedelta(days=1)
-        for old_m in theirs:
-            old_end = old_m.end_date
-            new_end = day_before if day_before >= old_m.start_date else old_m.start_date
-            old_m.end_date = new_end
-            session.flush()
-
-            record_audit(
-                session,
-                action="membership.end_term",
-                resource_type="membership",
-                resource_id=old_m.id,
-                summary="Membership ended automatically due to transfer to another LC",
-                **_audit_actor(actor_memberships),
-                diff={"before": str(old_end), "after": str(new_end)},
-            )
 
     # Insert new membership
     new_membership = Membership(
