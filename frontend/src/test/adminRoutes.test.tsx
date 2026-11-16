@@ -48,9 +48,9 @@ describe('admin console guards', () => {
     const nav = screen.getByRole('navigation', { name: 'Admin console' })
     expect(nav).toHaveTextContent('LCs')
     expect(nav).toHaveTextContent('People')
+    expect(nav).toHaveTextContent('Memberships')
     expect(nav).toHaveTextContent('Auditing')
     // Only the screens built this term appear; the rest stay hidden until their own tickets land.
-    expect(nav).not.toHaveTextContent('Memberships')
     expect(nav).not.toHaveTextContent('Permission matrix')
   })
 

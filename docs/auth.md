@@ -96,6 +96,11 @@ is a config change, not a code change (spec §9 TODO: confirm the full list of d
 **An `ANONYMISED` person can never sign in.** After a deletion request (spec §8) the row
 counts as "no match".
 
+**Neither can an `INACTIVE` one.** An admin deactivated them on the Admin console
+(DEV-47, `docs/data-model.md` → `person`), so they also count as "no match": `/me`
+shows the not-allocated page, and every feature endpoint answers 401. This takes effect
+on their next request, without waiting for their memberships' dates to run out.
+
 **"Signed in, no access" is not an error.** `/me` answers 200 with `person: null` (no
 match) or an empty `memberships` list (term ended / not started). The frontend shows the
 not-allocated page with the spec's fixed wording.

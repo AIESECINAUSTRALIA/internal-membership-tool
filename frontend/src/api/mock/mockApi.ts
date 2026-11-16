@@ -42,9 +42,13 @@ import type {
   ActionResult,
   AddMemberInput,
   AddMemberResult,
+  AdminMembershipRow,
+  AdminPersonInput,
   AdminPersonQuery,
   AdminPersonRow,
   Api,
+  AssignMembershipInput,
+  CorrectMembershipInput,
   CatalogAttribute,
   CreateAttributeInput,
   CreateLcInput,
@@ -84,6 +88,7 @@ import {
   TEAMS,
   type DbAttribute,
   type DbMembership,
+  type DbPerson,
   type MockDb,
   type PersonaKey,
 } from './seed'
@@ -224,13 +229,16 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   function buildMe(personId: string): Me {
     const p = personById(personId)
     if (!p) throw new Error(`Unknown person ${personId}`)
+    // A deactivated person has no access at all, whatever their dates say (DEV-47).
+    // The backend treats them as "no person"; here they land on the not-allocated page.
+    const deactivated = p.status === 'inactive'
     return {
       person: { id: p.id, firstName: p.firstName, lastName: p.lastName, email: p.email },
       // Active only, like the backend's `/me` (§3.2). History is `getMyMembershipHistory`.
-      memberships: db.memberships
-        .filter((m) => m.personId === personId && isActive(m, today()))
-        .map(toView),
-      permissions: resolvePermissions(personId),
+      memberships: deactivated
+        ? []
+        : db.memberships.filter((m) => m.personId === personId && isActive(m, today())).map(toView),
+      permissions: deactivated ? [] : resolvePermissions(personId),
     }
   }
 
@@ -252,6 +260,68 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   const isNameTaken = (name: string, exceptId?: string) =>
     lcs.some((l) => l.id !== exceptId && l.name.toLowerCase() === name.toLowerCase())
   const isKnownState = (state: string) => STATE_TIMEZONES.some((row) => row.state === state)
+
+  // ---- Admin console: people and memberships (DEV-47) ----------------------
+  // The same rules as `backend/app/repositories/admin_people.py`.
+
+  const dayBefore = (date: IsoDate) => dayjs(date).subtract(1, 'day').format('YYYY-MM-DD')
+  const overlaps = (m: DbMembership, start: IsoDate, end: IsoDate) => m.startDate <= end && m.endDate >= start
+  const isIsoDate = (date: string) => dayjs(date, 'YYYY-MM-DD', true).isValid()
+  const isEmailTaken = (email: string, exceptId?: string) =>
+    db.people.some((p) => p.id !== exceptId && p.email.toLowerCase() === email)
+  const personRow = (p: DbPerson): AdminPersonRow => ({
+    id: p.id,
+    firstName: p.firstName,
+    lastName: p.lastName,
+    email: p.email,
+    active: db.memberships.some((m) => m.personId === p.id && isActive(m, today())),
+    status: p.status ?? 'active',
+  })
+
+  /** §3.4 on the Admin console: never yourself, and the position involved must rank
+   * below the actor's. The president exception applies to adding only. */
+  function adminRankProblem(actor: Actor, personId: string, pos: Position, lcId: string, adding: boolean): string | null {
+    const acting = actingMembership(actor)
+    if (!acting) return 'No active membership found.'
+    if (personId === actor.personId) return "You can't change your own memberships."
+    if (pos.rank < acting.position.rank) return null
+    if (adding && acting.position.canAddSameRank && pos.key === acting.position.key && lcId === acting.lc.id) return null
+    return "You can't assign or change a position at or above your own."
+  }
+
+  /** Editing or deactivating a person needs the actor to outrank every position they
+   * hold or are about to hold: their email decides who can sign in as them. */
+  function personRankProblem(actor: Actor, personId: string, allowSelf: boolean): string | null {
+    if (personId === actor.personId) return allowSelf ? null : "You can't do this to your own record."
+    for (const m of db.memberships) {
+      if (m.personId !== personId || m.endDate < today()) continue
+      const problem = adminRankProblem(actor, personId, position(m.positionKey), m.lcId, false)
+      if (problem) return problem
+    }
+    return null
+  }
+
+  /** §3.6 and §5.1, shared by assign and correct. */
+  function membershipConflict(
+    personId: string,
+    lc: Lc,
+    functionKey: string | null,
+    start: IsoDate,
+    end: IsoDate,
+    ignoreId?: string,
+  ): string | null {
+    const theirs = db.memberships.filter((m) => m.personId === personId && m.id !== ignoreId)
+    if (lc.type === 'lc' && theirs.some((m) => lcOf(m.lcId).type === 'mc' && overlaps(m, start, end))) {
+      return "This person can't be added. Contact your MC."
+    }
+    if (functionKey !== null && theirs.some((m) => m.lcId === lc.id && m.functionKey === functionKey && overlaps(m, start, end))) {
+      return 'This person already holds that function in this LC for overlapping dates.'
+    }
+    return null
+  }
+
+  const levelProblem = (pos: Position, lc: Lc) =>
+    pos.level === lc.type ? null : `${pos.label} can't be used in ${lc.type === 'mc' ? 'the MC' : 'an LC'}.`
 
   // ---- Api ----------------------------------------------------------------
   return {
@@ -411,6 +481,8 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       const email = input.email.trim().toLowerCase()
       const existing = db.people.find((p) => p.email === email)
       if (existing?.id === me.person.id) return reject("This person can't be added. Contact your MC.")
+      // Only the Admin console's Reactivate brings a deactivated person back (DEV-47).
+      if (existing?.status === 'inactive') return reject("This person can't be added. Contact your MC.")
 
       if (!existing) {
         if (!input.firstName?.trim() || !input.lastName?.trim()) return { status: 'needs_name' }
@@ -642,13 +714,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       // narrower cut to apply, so a missing grant simply returns nothing (deny by default).
       if (widestScope(me.permissions, 'person', 'manage') === null) return { rows: [], total: 0 }
 
-      let rows: AdminPersonRow[] = db.people.map((p) => ({
-        id: p.id,
-        firstName: p.firstName,
-        lastName: p.lastName,
-        email: p.email,
-        active: db.memberships.some((m) => m.personId === p.id && isActive(m, today())),
-      }))
+      let rows: AdminPersonRow[] = db.people.map(personRow)
 
       const needle = query.search.trim().toLowerCase()
       if (needle) {
@@ -664,6 +730,205 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
       const start = query.page * query.pageSize
       return { rows: rows.slice(start, start + query.pageSize), total: rows.length }
+    },
+
+    async createPerson(input: AdminPersonInput): Promise<ActionResult> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'person', 'manage')) return reject("You can't manage people.")
+      const firstName = input.firstName.trim()
+      const lastName = input.lastName.trim()
+      const email = input.email.trim().toLowerCase()
+      if (!firstName || !lastName) return reject('Enter a first name and a last name.')
+      if (!EMAIL_PATTERN.test(email)) return reject('Enter a valid email address.')
+      if (isEmailTaken(email)) return reject('Someone already has that email address.')
+      db.people.push({ id: `p-new-${nextId++}`, firstName, lastName, email, customFields: {}, status: 'active' })
+      return { status: 'ok' }
+    },
+
+    async updatePerson(personId: string, changes: Partial<AdminPersonInput>): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'person', 'manage')) return reject("You can't manage people.")
+      const person = personById(personId)
+      if (!person) return reject('That person no longer exists.')
+      const problem = personRankProblem(actor, personId, true)
+      if (problem) return reject(problem)
+
+      // All or nothing: check every field before changing any.
+      const firstName = (changes.firstName ?? person.firstName).trim()
+      const lastName = (changes.lastName ?? person.lastName).trim()
+      const email = (changes.email ?? person.email).trim().toLowerCase()
+      if (!firstName || !lastName) return reject('Enter a first name and a last name.')
+      if (!EMAIL_PATTERN.test(email)) return reject('Enter a valid email address.')
+      if (isEmailTaken(email, person.id)) return reject('Someone already has that email address.')
+      Object.assign(person, { firstName, lastName, email })
+      return { status: 'ok' }
+    },
+
+    async deactivatePerson(personId: string): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'person', 'manage')) return reject("You can't manage people.")
+      const person = personById(personId)
+      if (!person) return reject('That person no longer exists.')
+      if (person.status === 'inactive') return reject('This person is already deactivated.')
+      const problem = personRankProblem(actor, personId, false)
+      if (problem) return reject(problem)
+
+      // End what's active today on yesterday (or today, if it only started today).
+      // Nothing is removed: the memberships stay, as history (§1.5).
+      const yesterday = dayBefore(today())
+      for (const m of db.memberships) {
+        if (m.personId === personId && isActive(m, today())) m.endDate = yesterday < m.startDate ? m.startDate : yesterday
+      }
+      person.status = 'inactive'
+      return { status: 'ok' }
+    },
+
+    async reactivatePerson(personId: string): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'person', 'manage')) return reject("You can't manage people.")
+      const person = personById(personId)
+      if (!person) return reject('That person no longer exists.')
+      if (person.status !== 'inactive') return reject('Only a deactivated person can be reactivated.')
+      const problem = personRankProblem(actor, personId, false)
+      if (problem) return reject(problem)
+      person.status = 'active'
+      return { status: 'ok' }
+    },
+
+    async listPersonMemberships(personId: string): Promise<AdminMembershipRow[]> {
+      await wait()
+      const { me } = requireActor()
+      if (!can(me.permissions, 'membership', 'manage')) return []
+      return db.memberships
+        .filter((m) => m.personId === personId)
+        .sort((a, b) => (a.startDate < b.startDate ? 1 : a.startDate > b.startDate ? -1 : 0))
+        .map((m) => {
+          const lc = lcOf(m.lcId)
+          const pos = position(m.positionKey)
+          return {
+            id: m.id,
+            lc: { id: lc.id, name: lc.name, type: lc.type },
+            position: { key: pos.key, label: pos.label },
+            function: functionRef(m.functionKey),
+            termName: buildTerms(today()).find((t) => t.id === m.termId)?.name ?? null,
+            teamName: teamRef(m.teamId)?.name ?? null,
+            startDate: m.startDate,
+            endDate: m.endDate,
+            current: isActive(m, today()),
+          }
+        })
+    },
+
+    async assignMembership(personId: string, input: AssignMembershipInput): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'membership', 'manage')) return reject("You can't manage memberships.")
+      const person = personById(personId)
+      if (!person) return reject('That person no longer exists.')
+      if (person.status === 'inactive') return reject('Reactivate this person before assigning a membership.')
+      const { startDate: start, endDate: end } = input
+      if (!isIsoDate(start) || !isIsoDate(end)) return reject('Enter a start date and an end date.')
+      if (end < start) return reject('The end date must be on or after the start date.')
+
+      const lc = lcs.find((l) => l.id === input.lcId)
+      if (!lc) return reject('LC not found.')
+      if (!lc.active) return reject('That LC is inactive.')
+      const pos = POSITIONS.find((p) => p.key === input.positionKey)
+      if (!pos) return reject('Choose a position that is in use.')
+      if (input.functionKey !== null && !FUNCTIONS.some((f) => f.key === input.functionKey && f.active)) {
+        return reject('Choose a function that is in use.')
+      }
+      const problem =
+        adminRankProblem(actor, personId, pos, lc.id, true) ??
+        levelProblem(pos, lc) ??
+        membershipConflict(personId, lc, input.functionKey, start, end)
+      if (problem) return reject(problem)
+      const term = buildTerms(today()).find((t) => t.startDate <= start && t.endDate >= start)
+      if (!term) return reject('No term covers that start date.')
+
+      // Transfer (§5.1): memberships in other LCs end the day before the new one starts.
+      for (const m of db.memberships) {
+        if (m.personId === personId && m.lcId !== lc.id && overlaps(m, start, end)) {
+          m.endDate = dayBefore(start) < m.startDate ? m.startDate : dayBefore(start)
+        }
+      }
+      db.memberships.push({
+        id: `m-${nextId++}`,
+        personId,
+        lcId: lc.id,
+        positionKey: pos.key,
+        functionKey: input.functionKey,
+        termId: term.id,
+        startDate: start,
+        endDate: end,
+        teamId: null,
+      })
+      return { status: 'ok' }
+    },
+
+    async correctMembership(membershipId: string, changes: CorrectMembershipInput): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'membership', 'manage')) return reject("You can't manage memberships.")
+      const m = db.memberships.find((x) => x.id === membershipId)
+      if (!m) return reject('Membership not found.')
+      const lc = lcOf(m.lcId)
+      const oldPos = position(m.positionKey)
+      const ownProblem = adminRankProblem(actor, m.personId, oldPos, m.lcId, false)
+      if (ownProblem) return reject(ownProblem)
+
+      const newPos = changes.positionKey === undefined ? oldPos : POSITIONS.find((p) => p.key === changes.positionKey)
+      if (!newPos) return reject('Choose a position that is in use.')
+      if (newPos.key !== oldPos.key) {
+        const problem = adminRankProblem(actor, m.personId, newPos, m.lcId, false) ?? levelProblem(newPos, lc)
+        if (problem) return reject(problem)
+      }
+
+      const functionKey = changes.functionKey === undefined ? m.functionKey : changes.functionKey
+      if (functionKey !== null && functionKey !== m.functionKey && !FUNCTIONS.some((f) => f.key === functionKey && f.active)) {
+        return reject('Choose a function that is in use.')
+      }
+      if (functionKey !== m.functionKey && m.teamId !== null) {
+        return reject(
+          'This membership has been in a team of its current function. End it and assign a new one instead, so the team history stays right.',
+        )
+      }
+
+      const start = changes.startDate ?? m.startDate
+      const end = changes.endDate ?? m.endDate
+      if (!isIsoDate(start) || !isIsoDate(end)) return reject('Enter a start date and an end date.')
+      if (end < start) return reject('The end date must be on or after the start date.')
+      const datesChanged = start !== m.startDate || end !== m.endDate
+      if (
+        datesChanged &&
+        db.memberships.some((x) => x.personId === m.personId && x.id !== m.id && x.lcId !== m.lcId && overlaps(x, start, end))
+      ) {
+        return reject("These dates overlap this person's membership in another LC. Correct or end that one first.")
+      }
+      const conflict = membershipConflict(m.personId, lc, functionKey, start, end, m.id)
+      if (conflict) return reject(conflict)
+
+      Object.assign(m, { positionKey: newPos.key, functionKey, startDate: start, endDate: end })
+      return { status: 'ok' }
+    },
+
+    async endMembership(membershipId: string, endDate: IsoDate): Promise<ActionResult> {
+      await wait()
+      const { me, actor } = requireActor()
+      if (!can(me.permissions, 'membership', 'manage')) return reject("You can't manage memberships.")
+      const m = db.memberships.find((x) => x.id === membershipId)
+      if (!m) return reject('Membership not found.')
+      const problem = adminRankProblem(actor, m.personId, position(m.positionKey), m.lcId, false)
+      if (problem) return reject(problem)
+      if (!isIsoDate(endDate)) return reject('Enter an end date.')
+      if (endDate < m.startDate) return reject("A membership can't end before it started.")
+      if (endDate >= m.endDate) return reject('Choose a date before the current end date. To extend, use Correct.')
+      m.endDate = endDate
+      return { status: 'ok' }
     },
 
     // ---- Admin console: Metrics & custom fields (§1.5, §4.2) ----------------
