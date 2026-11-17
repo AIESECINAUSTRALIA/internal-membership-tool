@@ -27,7 +27,6 @@ from app.api.deps import (
     get_current_actor,
     get_current_user,
     get_db,
-    get_token_verifier,
 )
 from app.core.auth import AuthenticatedUser
 from app.main import app
@@ -113,15 +112,6 @@ def test_options_reject_a_signed_in_account_that_is_not_one_of_our_people(
 
 def test_options_reject_anonymous(client: TestClient) -> None:
     del app.dependency_overrides[get_current_actor]
-
-    def no_verification_expected() -> object:
-        class Verifier:
-            def verify(self, token: str) -> AuthenticatedUser:
-                raise AssertionError("Verifier should not run without credentials")
-
-        return Verifier()
-
-    app.dependency_overrides[get_token_verifier] = no_verification_expected
 
     assert client.get(URL).status_code == 401
 

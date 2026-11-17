@@ -40,7 +40,15 @@ from app.models.person import Person
 from app.models.privacy import AuditLog
 from app.repositories.attribute import get_attribute_value, set_attribute_value
 
-from .helpers import make_attribute, make_function, make_lc, make_membership, make_person, make_term
+from .helpers import (
+    api_client_options,
+    make_attribute,
+    make_function,
+    make_lc,
+    make_membership,
+    make_person,
+    make_term,
+)
 
 ME_FIELDS = "/api/v1/me/custom-fields"
 ME_HISTORY = "/api/v1/me/memberships"
@@ -129,7 +137,8 @@ def client(db_session: Session) -> Generator[Fixture, None, None]:
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_actor] = lambda: _actor(alice, m_alice)
     try:
-        yield TestClient(app), seed
+        with TestClient(app, **api_client_options()) as client:
+            yield client, seed
     finally:
         app.dependency_overrides.clear()
 

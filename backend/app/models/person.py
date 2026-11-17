@@ -28,6 +28,7 @@ class Person(Base):
     __tablename__ = "person"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    expa_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     full_name: Mapped[str] = mapped_column(String)
     preferred_name: Mapped[str | None] = mapped_column(String, nullable=True)
     aiesec_email: Mapped[str] = mapped_column(String, unique=True, index=True)

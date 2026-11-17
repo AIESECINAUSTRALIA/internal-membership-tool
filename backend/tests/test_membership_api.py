@@ -30,7 +30,7 @@ from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
-from tests.helpers import make_state_timezone
+from tests.helpers import api_client_options, make_state_timezone
 
 # ---------------------------------------------------------------------------
 # Test Fixtures
@@ -200,7 +200,7 @@ def client_with_actor(
     # Default actor is LCVP
     app.dependency_overrides[get_current_actor] = lambda: actor_map["lcvp"]
 
-    with TestClient(app) as test_client:
+    with TestClient(app, **api_client_options()) as test_client:
         yield test_client, actor_map, seed
 
     app.dependency_overrides.clear()

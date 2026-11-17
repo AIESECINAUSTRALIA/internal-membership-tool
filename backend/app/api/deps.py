@@ -1,22 +1,16 @@
-"""FastAPI dependencies shared by the routes.
-
-A route asks for what it needs as a typed parameter, e.g. `person: CurrentPerson`,
-and FastAPI runs the matching function first. Tests swap any of them out with
-`app.dependency_overrides`.
-"""
+"""FastAPI dependencies shared by the routes."""
 
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, select
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import Settings, get_settings
-from app.core.auth import AuthenticatedUser, AuthError, TokenVerifier, build_token_verifier
+from app.core.auth import AuthenticatedUser
+from app.core.sessions import get_valid_session
 from app.db.session import SessionLocal
 from app.models.membership import Membership
 from app.models.person import Person, PersonStatus
@@ -25,13 +19,9 @@ from app.repositories.membership import (
     get_active_memberships_for_person,
 )
 
-# `auto_error=False` so a missing header reaches our code and gets the same 401 as a
-# bad token, rather than FastAPI's default 403.
-_bearer = HTTPBearer(auto_error=False)
-
 
 def get_db() -> Generator[Session, None, None]:
-    """One database session per request, always closed afterwards."""
+    """One database session per request."""
     session = SessionLocal()
     try:
         yield session
@@ -42,68 +32,56 @@ def get_db() -> Generator[Session, None, None]:
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_token_verifier(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> TokenVerifier | None:
-    """Returns None when auth is not configured; only raises when misconfigured."""
-    if not settings.supabase_url:
-        return None
-    try:
-        return build_token_verifier(settings)
-    except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+def get_current_user(request: Request, db: DbSession) -> AuthenticatedUser:
+    """Authenticate the request using its server-side session cookie."""
+    token = request.cookies.get("__session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not signed in")
 
+    session = get_valid_session(db, token)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
 
-def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    verifier: Annotated[TokenVerifier | None, Depends(get_token_verifier)],
-) -> AuthenticatedUser:
-    """The caller, from their Supabase access token. 401 without a valid one."""
-    if credentials is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Not signed in",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if verifier is None:
-        raise HTTPException(status_code=503, detail="Authentication is not configured")
-    try:
-        return verifier.verify(credentials.credentials)
-    except AuthError as exc:
-        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
-        raise HTTPException(
-            status_code=exc.status_code, detail=exc.detail, headers=headers
-        ) from exc
+    person = db.get(Person, session.person_id)
+    if person is None or person.status == PersonStatus.ANONYMISED:
+        raise HTTPException(status_code=401, detail="Account is unavailable")
+
+    if not person.expa_id:
+        raise HTTPException(status_code=401, detail="EXPA identity is not linked")
+
+    return AuthenticatedUser(
+        subject=person.expa_id,
+        email=person.aiesec_email.lower(),
+    )
 
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
 def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
-    """The `person` whose `aiesec_email` matches the signed-in email (spec §9).
-
-    None when nobody matches. An ANONYMISED person also counts as no match: after a
-    deletion request their record must never sign anyone in again (spec §8).
-    """
-    stmt = select(Person).where(
-        func.lower(Person.aiesec_email) == user.email,
-        Person.status != PersonStatus.ANONYMISED,
+    """Resolve the local person using the linked EXPA identity."""
+    return (
+        db.execute(
+            select(Person).where(
+                Person.expa_id == user.subject,
+                Person.status != PersonStatus.ANONYMISED,
+            )
+        )
+        .scalars()
+        .first()
     )
-    return db.execute(stmt).scalars().first()
 
 
 CurrentPerson = Annotated[Person | None, Depends(get_current_person)]
 
 
 def get_today() -> date:
-    """Today's date, as a dependency so tests can fix the date
-    (`app.dependency_overrides[get_today] = lambda: date(...)`)."""
     return date.today()
 
 
 @dataclass(frozen=True)
 class CurrentActor:
-    """The signed-in person and their active memberships, for feature endpoints."""
+    """The authenticated person and their active memberships."""
 
     person: Person
     active_memberships: Sequence[Membership]
@@ -111,11 +89,6 @@ class CurrentActor:
 
 
 def get_current_actor(person: CurrentPerson, db: DbSession) -> CurrentActor:
-    """Resolve the authenticated actor and their active memberships.
-
-    Authentication is handled by CurrentPerson, which depends on
-    the verified user from CurrentUser.
-    """
     if person is None:
         raise HTTPException(
             status_code=401,
