@@ -1,37 +1,15 @@
-"""Verifying who is calling the API (spec §9). Read `docs/auth.md` first.
-
-The browser signs in with Google through Supabase Auth and gets a short-lived
-access token (a JWT). It sends that token on every request as
-`Authorization: Bearer <token>`. This module checks the token and returns the
-caller's email. It does NOT decide what the caller may do — that is the
-permission matrix's job (spec §3), resolved from the email's `person` row.
-
-Why this is safe without a shared secret: Supabase signs tokens with a private
-key that only Supabase holds, and publishes the matching public keys at
-`<SUPABASE_URL>/auth/v1/.well-known/jwks.json` (a "JWKS"). We verify the
-signature with the public key, so a token we accept can only have come from our
-Supabase project.
-"""
+"""EXPA OAuth client and authentication helpers."""
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from urllib.parse import urlencode
 
-import jwt
+import httpx
 
 from app.config import Settings
 
-# Supabase signs with ES256 (an elliptic-curve key). Accepting only asymmetric
-# algorithms matters: if HS256 were allowed, an attacker could sign a token with
-# the PUBLIC key as an HMAC secret ("algorithm confusion").
-ALGORITHMS = ["ES256"]
-# Every token Supabase issues to a signed-in user carries this audience.
-AUDIENCE = "authenticated"
-
 
 class AuthError(Exception):
-    """Authentication failed. `status_code` is the HTTP status to answer with:
-    401 (no valid token: sign in again), 403 (valid token, but an email outside
-    the allowed domains), or 503 (auth not configured on this server)."""
+    """Authentication failure with an HTTP status and safe public message."""
 
     def __init__(self, status_code: int, detail: str) -> None:
         super().__init__(detail)
@@ -41,107 +19,118 @@ class AuthError(Exception):
 
 @dataclass(frozen=True)
 class AuthenticatedUser:
-    """Who the token says the caller is. `email` is lower-cased."""
+    """Identity established through EXPA and a local server-side session."""
 
-    subject: str  # Supabase's user id (`sub` claim). Not stored anywhere by us.
+    subject: str
     email: str
-    # Supabase's id for this sign-in session (`session_id` claim). It stays the same
-    # across token refreshes and changes on each new sign-in, so it tells "a new
-    # sign-in" apart from "a page reload". Not personal data.
-    session_id: str | None = None
 
 
-class SigningKeyResolver(Protocol):
-    """Finds the public key a token was signed with. `jwt.PyJWKClient` fits this
-    shape; tests pass a stub holding a key they generated themselves."""
+@dataclass(frozen=True)
+class ExpaIdentity:
+    """Identity returned by EXPA GraphQL."""
 
-    def get_signing_key_from_jwt(self, token: str) -> jwt.PyJWK: ...
-
-
-class TokenVerifier:
-    """Checks an access token: signature, expiry, issuer, audience, email domain."""
-
-    def __init__(
-        self,
-        *,
-        issuer: str,
-        allowed_email_domains: frozenset[str],
-        key_resolver: SigningKeyResolver,
-    ) -> None:
-        self._issuer = issuer
-        self._allowed_email_domains = allowed_email_domains
-        self._key_resolver = key_resolver
-
-    def verify(self, token: str) -> AuthenticatedUser:
-        claims = self._decode(token)
-
-        email = claims.get("email")
-        subject = claims.get("sub")
-        if not isinstance(email, str) or not email or not isinstance(subject, str):
-            raise AuthError(401, "Token has no email or subject")
-
-        email = email.strip().lower()
-        if not is_allowed_email(email, self._allowed_email_domains):
-            raise AuthError(403, "Only AIESEC accounts can sign in")
-
-        session_id = claims.get("session_id")
-        return AuthenticatedUser(
-            subject=subject,
-            email=email,
-            session_id=session_id if isinstance(session_id, str) and session_id else None,
-        )
-
-    def _decode(self, token: str) -> dict[str, Any]:
-        try:
-            signing_key = self._key_resolver.get_signing_key_from_jwt(token)
-            claims: dict[str, Any] = jwt.decode(
-                token,
-                signing_key.key,
-                algorithms=ALGORITHMS,
-                audience=AUDIENCE,
-                issuer=self._issuer,
-                options={"require": ["exp", "iss", "aud", "sub"]},
-            )
-        except jwt.PyJWKClientConnectionError as exc:
-            # We couldn't download Supabase's public keys. Not the caller's fault.
-            raise AuthError(503, "Could not reach the sign-in provider") from exc
-        except jwt.PyJWTError as exc:
-            # Bad signature, expired, wrong audience/issuer, unknown key, malformed...
-            # The caller only needs to know "sign in again"; the reason stays server-side.
-            raise AuthError(401, "Invalid or expired token") from exc
-        return claims
+    expa_id: str
+    aiesec_email: str
 
 
 def is_allowed_email(email: str, allowed_domains: frozenset[str]) -> bool:
-    """True when the part after the LAST `@` is exactly one of `allowed_domains`.
-
-    An exact match, not `endswith`: `x@notaiesec.net` and `x@aiesec.net.evil.com`
-    are both rejected.
-    """
-    _, at, domain = email.rpartition("@")
-    return bool(at) and domain.lower() in allowed_domains
+    """Check the exact email domain, never a suffix match."""
+    _, at, domain = email.strip().lower().rpartition("@")
+    return bool(at) and bool(domain) and domain in allowed_domains
 
 
-_verifier_cache: dict[tuple[str, frozenset[str]], TokenVerifier] = {}
+class ExpaOAuthClient:
+    """Exchange an OAuth code and retrieve the authenticated EXPA identity."""
 
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
 
-def build_token_verifier(settings: Settings) -> TokenVerifier:
-    """The verifier for the configured Supabase project.
+    @property
+    def callback_url(self) -> str:
+        return f"{self.settings.app_base_url.rstrip('/')}/api/v1/auth/callback"
 
-    Cached, because `PyJWKClient` caches the downloaded public keys: building a new
-    one per request would fetch the JWKS on every call.
-    """
-    supabase_url = settings.supabase_url.rstrip("/")
-    if not supabase_url:
-        raise AuthError(503, "Authentication is not configured (SUPABASE_URL is empty)")
+    def authorization_url(self, state: str) -> str:
+        if not self.settings.expa_client_id:
+            raise AuthError(503, "EXPA authentication is not configured")
 
-    cache_key = (supabase_url, settings.allowed_email_domain_set)
-    verifier = _verifier_cache.get(cache_key)
-    if verifier is None:
-        verifier = TokenVerifier(
-            issuer=f"{supabase_url}/auth/v1",
-            allowed_email_domains=settings.allowed_email_domain_set,
-            key_resolver=jwt.PyJWKClient(f"{supabase_url}/auth/v1/.well-known/jwks.json"),
+        params = urlencode(
+            {
+                "response_type": "code",
+                "client_id": self.settings.expa_client_id,
+                "redirect_uri": self.callback_url,
+                "state": state,
+            }
         )
-        _verifier_cache[cache_key] = verifier
-    return verifier
+        return f"{self.settings.expa_auth_url.rstrip('/')}/oauth/authorize?{params}"
+
+    async def exchange_code(self, code: str) -> str:
+        if not self.settings.expa_client_id or not self.settings.expa_client_secret:
+            raise AuthError(503, "EXPA authentication is not configured")
+
+        payload = {
+            "grant_type": "authorization_code",
+            "code": code,
+            "client_id": self.settings.expa_client_id,
+            "client_secret": self.settings.expa_client_secret,
+            "redirect_uri": self.callback_url,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self.settings.expa_auth_url.rstrip('/')}/oauth/token",
+                    data=payload,
+                )
+                response.raise_for_status()
+                data = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AuthError(502, "EXPA token exchange failed") from exc
+
+        token = data.get("access_token") if isinstance(data, dict) else None
+        if not isinstance(token, str) or not token:
+            raise AuthError(502, "EXPA returned no access token")
+
+        return token
+
+    async def get_current_person(self, access_token: str) -> ExpaIdentity:
+        query = """
+        query GetCurrentPerson {
+          currentPerson {
+            id
+            aiesec_email
+          }
+        }
+        """
+
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    self.settings.expa_graphql_url,
+                    json={"query": query},
+                    headers={
+                        "Authorization": access_token,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise AuthError(502, "Could not retrieve EXPA identity") from exc
+
+        if not isinstance(result, dict) or result.get("errors"):
+            raise AuthError(502, "EXPA identity lookup failed")
+
+        data = result.get("data")
+        person = data.get("currentPerson") if isinstance(data, dict) else None
+        if not isinstance(person, dict):
+            raise AuthError(502, "EXPA returned no person")
+
+        expa_id = person.get("id")
+        email = person.get("aiesec_email")
+
+        if expa_id is None or not isinstance(email, str) or not email.strip():
+            raise AuthError(502, "EXPA identity is incomplete")
+
+        return ExpaIdentity(
+            expa_id=str(expa_id),
+            aiesec_email=email.strip().lower(),
+        )

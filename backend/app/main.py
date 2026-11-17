@@ -1,19 +1,34 @@
 """FastAPI application entrypoint.
 
-Creates the app, configures CORS for the local Vite dev server, and mounts the
-versioned API routers from `app/api/router.py`. Endpoints themselves live under
-`app/api/v1/`; this file stays thin.
+Configures CORS, Origin validation, and versioned API routes.
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.router import api_router
 from app.config import get_settings
 
 app = FastAPI(title="AIESEC Australia — Membership Tool API")
 
-# Allow the frontend (the Vite dev server locally) to call the API from the browser.
+
+@app.middleware("http")
+async def validate_request_origin(request: Request, call_next):
+    """Reject non-GET requests without the exact configured Origin."""
+    if request.method not in ("GET", "OPTIONS"):
+        origin = request.headers.get("origin")
+        expected_origin = get_settings().app_base_url
+
+        if origin != expected_origin:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Invalid request origin"},
+            )
+
+    return await call_next(request)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[get_settings().frontend_origin],
@@ -32,5 +47,4 @@ def read_root() -> dict[str, str]:
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    """Liveness probe."""
     return {"status": "ok"}

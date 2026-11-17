@@ -16,21 +16,29 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore")
 
-    # CORS: the browser origin the API accepts requests from (the Vite dev server locally).
     frontend_origin: str = "http://localhost:5173"
 
-    # The Supabase project URL, e.g. https://abcd.supabase.co. Access tokens are verified
-    # against its public signing keys (JWKS) — see docs/auth.md. Empty means auth is not
-    # configured, and protected endpoints answer 503 instead of letting anyone in.
-    supabase_url: str = ""
+    # AIESEC OAuth authorization endpoint.
+    expa_auth_url: str = "https://auth.aiesec.org"
 
-    # Comma-separated email domains allowed to sign in (spec §9), e.g. "aiesec.net" or
-    # "aiesec.net,aiesec.org.au". Data, not code: add a domain here, not in an if-statement.
+    # EXPA GraphQL API endpoint.
+    expa_graphql_url: str = "https://gis-api.aiesec.org/graphql"
+
+    # Registered OAuth application credentials.
+    expa_client_id: str = ""
+    expa_client_secret: str = ""
+
+    # Public origin of the deployed application.
+    app_base_url: str = "http://localhost:8000"
+
+    # Fixed session lifetime; requests never extend expiry.
+    session_ttl_hours: int = 12
+
+    # Exact permitted AIESEC email domains.
     allowed_email_domains: str = "aiesec.net"
 
     @property
     def allowed_email_domain_set(self) -> frozenset[str]:
-        """`allowed_email_domains` split, trimmed and lower-cased."""
         return frozenset(
             domain.strip().lower()
             for domain in self.allowed_email_domains.split(",")
@@ -40,6 +48,4 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    """The settings, read once per process. Tests override this with FastAPI's
-    `app.dependency_overrides` or by clearing the cache."""
     return Settings()

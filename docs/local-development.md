@@ -18,6 +18,21 @@ Two ways to run the stack locally:
 Every path needs the `.env` file first — `cp .env.example .env` (see
 [Environment variables & secrets](#environment-variables--secrets)).
 
+> **Authentication transition (DEV-82 / DEV-83).** The backend now uses
+> EXPA OAuth and server-side sessions instead of Supabase JWTs.
+> Backend configuration uses `EXPA_AUTH_URL`, `EXPA_GRAPHQL_URL`,
+> `EXPA_CLIENT_ID`, `EXPA_CLIENT_SECRET`, `APP_BASE_URL`,
+> `SESSION_TTL_HOURS` and `ALLOWED_EMAIL_DOMAINS`.
+>
+> The frontend still uses Supabase until DEV-83. Its existing
+> `VITE_SUPABASE_*` and `VITE_AUTH_MODE` instructions are retained
+> for reference, but real frontend authentication will not work
+> against the new backend until DEV-83 is merged.
+>
+> Backend tests mock EXPA and require no real OAuth credentials.
+> Live EXPA authentication requires an HTTPS callback registered
+> with EXPA and matching deployment configuration.
+
 ### Prerequisites
 
 | | Docker path | Manual path |

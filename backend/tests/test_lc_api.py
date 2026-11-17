@@ -14,13 +14,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import CurrentActor, get_current_actor, get_db, get_token_verifier
+from app.api.deps import CurrentActor, get_current_actor, get_db
 from app.main import app
 from app.models.membership import Membership
 from app.models.org import LC, LCType, Position
 from app.models.person import Person
 from app.models.privacy import AuditLog
 from tests.helpers import (
+    api_client_options,
     make_lc,
     make_membership,
     make_person,
@@ -79,7 +80,7 @@ def lc_api(db_session: Session) -> Generator[LcApiFixture, None, None]:
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_actor] = lambda: actors["mc"]
 
-    with TestClient(app) as client:
+    with TestClient(app, **api_client_options()) as client:
         mc_membership = actors["mc"].acting_membership
         assert mc_membership is not None
         yield LcApiFixture(client, db_session, actors, mc_membership)
@@ -129,17 +130,6 @@ def test_other_actors_cannot_manage_lcs(lc_api: LcApiFixture, actor_name: str) -
 
 def test_unauthenticated_requests_are_rejected(lc_api: LcApiFixture) -> None:
     del app.dependency_overrides[get_current_actor]
-
-    # Authentication is configured for the test, but no credentials are supplied.
-    # The verifier must never be called without an access token.
-    def unexpected_verification():
-        class TestVerifier:
-            def verify(self, token: str):
-                raise AssertionError("Verifier should not run without credentials")
-
-        return TestVerifier()
-
-    app.dependency_overrides[get_token_verifier] = unexpected_verification
 
     assert lc_api.client.get("/api/v1/lcs").status_code == 401
     assert (

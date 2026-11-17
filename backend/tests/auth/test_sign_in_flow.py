@@ -20,8 +20,7 @@ from app.core.permissions import BASELINE_PERMISSION_MATRIX
 from app.models.membership import Membership
 from app.models.org import LC, Function, LCType, Position
 from app.models.person import Person
-from app.models.privacy import AuditLog
-from tests.auth.helpers import bearer, make_token
+from tests.auth.helpers import sign_in_as
 from tests.helpers import make_function, make_lc, make_membership, make_person, make_term
 
 # ---------------------------------------------------------------------------
@@ -93,14 +92,6 @@ def _expected_permissions(*position_keys: str) -> list[dict[str, str]]:
     ]
 
 
-def _sign_ins(db: Session) -> list[AuditLog]:
-    return list(
-        db.execute(select(AuditLog).where(AuditLog.action == "auth.sign_in").order_by(AuditLog.id))
-        .scalars()
-        .all()
-    )
-
-
 @pytest.fixture
 def lc(db_session: Session) -> LC:
     return make_lc(db_session, name="AIESEC in Flowtown")
@@ -114,14 +105,21 @@ def lc(db_session: Session) -> LC:
 def test_lcvp_sign_in_returns_the_lcvp_permissions(
     client: TestClient, db_session: Session, lc: LC
 ) -> None:
-    _person_in(db_session, email="test_flow_lcvp@aiesec.net", lc=lc, position_key="lcvp", rank=3)
+    person, _ = _person_in(
+        db_session,
+        email="test_flow_lcvp@aiesec.net",
+        lc=lc,
+        position_key="lcvp",
+        rank=3,
+    )
 
-    body = client.get("/api/v1/me", headers=bearer(make_token(email="test_flow_lcvp@aiesec.net")))
+    sign_in_as(client, db_session, person)
 
-    assert body.status_code == 200
-    permissions = body.json()["permissions"]
+    response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    permissions = response.json()["permissions"]
     assert permissions == _expected_permissions("lcvp")
-    # Spot-check against spec §3.1 so a wrong matrix can't pass by agreeing with itself.
     assert {"resource": "membership", "action": "view", "scope": "lc"} in permissions
     assert {"resource": "membership", "action": "edit", "scope": "function"} in permissions
 
@@ -141,9 +139,8 @@ def test_two_memberships_give_the_union_with_the_widest_scope(
         function=_function(db_session, "test_flow_bd"),
     )
 
-    permissions = client.get(
-        "/api/v1/me", headers=bearer(make_token(email="test_flow_both@aiesec.net"))
-    ).json()["permissions"]
+    sign_in_as(client, db_session, person)
+    permissions = client.get("/api/v1/me").json()["permissions"]
 
     assert permissions == _expected_permissions("team_leader", "lcvp")
     scopes = {(p["resource"], p["action"]): p["scope"] for p in permissions}
@@ -154,13 +151,12 @@ def test_two_memberships_give_the_union_with_the_widest_scope(
 
 
 def test_member_gets_own_scope_only(client: TestClient, db_session: Session, lc: LC) -> None:
-    _person_in(
+    person, _ = _person_in(
         db_session, email="test_flow_member@aiesec.net", lc=lc, position_key="member", rank=1
     )
 
-    permissions = client.get(
-        "/api/v1/me", headers=bearer(make_token(email="test_flow_member@aiesec.net"))
-    ).json()["permissions"]
+    sign_in_as(client, db_session, person)
+    permissions = client.get("/api/v1/me").json()["permissions"]
 
     assert permissions == _expected_permissions("member")
     assert {p["scope"] for p in permissions} == {"own"}
@@ -171,18 +167,23 @@ def test_mc_position_gets_national_scope(client: TestClient, db_session: Session
     mc = LC(name="Test Flow MC", type=LCType.MC, active=True)
     db_session.add(mc)
     db_session.flush()
-    _person_in(db_session, email="test_flow_mcvp@aiesec.net", lc=mc, position_key="mcvp", rank=6)
+    person, _ = _person_in(
+        db_session,
+        email="test_flow_mcvp@aiesec.net",
+        lc=mc,
+        position_key="mcvp",
+        rank=6,
+    )
 
-    permissions = client.get(
-        "/api/v1/me", headers=bearer(make_token(email="test_flow_mcvp@aiesec.net"))
-    ).json()["permissions"]
+    sign_in_as(client, db_session, person)
+    permissions = client.get("/api/v1/me").json()["permissions"]
 
     assert permissions == _expected_permissions("mcvp")
     assert {"resource": "membership", "action": "view", "scope": "all"} in permissions
 
 
 def test_ended_membership_grants_nothing(client: TestClient, db_session: Session, lc: LC) -> None:
-    _person_in(
+    person, _ = _person_in(
         db_session,
         email="test_flow_ended@aiesec.net",
         lc=lc,
@@ -191,96 +192,20 @@ def test_ended_membership_grants_nothing(client: TestClient, db_session: Session
         end=date.today() - timedelta(days=1),
     )
 
-    body = client.get(
-        "/api/v1/me", headers=bearer(make_token(email="test_flow_ended@aiesec.net"))
-    ).json()
+    sign_in_as(client, db_session, person)
+    body = client.get("/api/v1/me").json()
 
     assert body["person"] is not None
     assert body["memberships"] == []
     assert body["permissions"] == []
 
 
-# ---------------------------------------------------------------------------
-# Sign-in → audit_log
-# ---------------------------------------------------------------------------
-
-
-def test_sign_in_is_logged_once_per_session(
-    client: TestClient, db_session: Session, lc: LC
+def test_a_bare_email_header_does_not_sign_anyone_in(
+    client: TestClient,
 ) -> None:
-    person, _ = _person_in(
-        db_session, email="test_flow_audit@aiesec.net", lc=lc, position_key="lcvp", rank=3
-    )
-    before = len(_sign_ins(db_session))
-    first_session = make_token(email="test_flow_audit@aiesec.net", session_id="session-one")
-
-    # Page loads and token refreshes within one sign-in: logged once.
-    client.get("/api/v1/me", headers=bearer(first_session))
-    client.get("/api/v1/me", headers=bearer(first_session))
-    refreshed = make_token(email="test_flow_audit@aiesec.net", session_id="session-one")
-    client.get("/api/v1/me", headers=bearer(refreshed))
-
-    entries = _sign_ins(db_session)[before:]
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry.actor_person_id == person.id
-    assert entry.resource_type == "person"
-    assert entry.resource_id == person.id
-    assert entry.actor_membership_id is None
-    assert entry.diff == {"session_id": "session-one", "allocated": True}
-    assert entry.summary == "Signed in to the main app"
-
-    # Signing in again (a new Supabase session) is a new entry.
-    client.get(
+    response = client.get(
         "/api/v1/me",
-        headers=bearer(make_token(email="test_flow_audit@aiesec.net", session_id="session-two")),
+        headers={"X-Actor-Email": "test_flow_lcvp@aiesec.net"},
     )
-    assert len(_sign_ins(db_session)[before:]) == 2
-
-
-def test_unmatched_email_is_logged_without_any_personal_data(
-    client: TestClient, db_session: Session
-) -> None:
-    before = len(_sign_ins(db_session))
-
-    client.get("/api/v1/me", headers=bearer(make_token(email="test_flow_stranger@aiesec.net")))
-
-    [entry] = _sign_ins(db_session)[before:]
-    assert entry.actor_person_id is None
-    assert entry.resource_id is None
-    assert entry.diff is not None and entry.diff["allocated"] is False
-    # Audit rows are permanent: the email must not appear anywhere in them.
-    row_text = f"{entry.summary} {entry.diff} {entry.resource_type} {entry.action}"
-    assert "stranger" not in row_text
-    assert "@" not in row_text
-
-
-def test_unallocated_person_is_logged_as_not_allocated(
-    client: TestClient, db_session: Session, lc: LC
-) -> None:
-    person = make_person(db_session, email="test_flow_noterm@aiesec.net")
-    before = len(_sign_ins(db_session))
-
-    client.get("/api/v1/me", headers=bearer(make_token(email="test_flow_noterm@aiesec.net")))
-
-    [entry] = _sign_ins(db_session)[before:]
-    assert entry.actor_person_id == person.id
-    assert entry.diff is not None and entry.diff["allocated"] is False
-    assert "not allocated" in entry.summary
-
-
-def test_rejected_sign_in_is_not_logged(client: TestClient, db_session: Session) -> None:
-    before = len(_sign_ins(db_session))
-
-    response = client.get("/api/v1/me", headers=bearer(make_token(email="someone@gmail.com")))
-
-    assert response.status_code == 403
-    assert len(_sign_ins(db_session)) == before
-
-
-def test_a_bare_email_header_does_not_sign_anyone_in(client: TestClient, lc: LC) -> None:
-    """An earlier development stub (PR #18) trusted an `X-Actor-Email` header. Only a
-    signed token counts here: the header alone must not get anyone in (spec §2A.3)."""
-    response = client.get("/api/v1/me", headers={"X-Actor-Email": "test_flow_lcvp@aiesec.net"})
 
     assert response.status_code == 401
