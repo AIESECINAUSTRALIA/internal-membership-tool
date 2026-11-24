@@ -1,4 +1,9 @@
-"""FastAPI dependencies shared by the routes."""
+"""FastAPI dependencies shared by the routes.
+
+A route asks for what it needs as a typed parameter, e.g. `person: CurrentPerson`,
+and FastAPI runs the matching function first. Tests swap any of them out with
+`app.dependency_overrides`.
+"""
 
 from collections.abc import Generator, Sequence
 from dataclasses import dataclass
@@ -21,7 +26,7 @@ from app.repositories.membership import (
 
 
 def get_db() -> Generator[Session, None, None]:
-    """One database session per request."""
+    """One database session per request, always closed afterwards."""
     session = SessionLocal()
     try:
         yield session
@@ -33,7 +38,13 @@ DbSession = Annotated[Session, Depends(get_db)]
 
 
 def get_current_user(request: Request, db: DbSession) -> AuthenticatedUser:
-    """Authenticate the request using its server-side session cookie."""
+    """The caller, from their `__session` cookie. 401 without a valid session.
+
+    The cookie holds a random token; we look up its hash in `user_session` (see
+    `app/core/sessions.py`). The allowed-email-domain check is NOT repeated here: it
+    runs once, at sign-in. A session therefore outlives a change to
+    ALLOWED_EMAIL_DOMAINS by at most SESSION_TTL_HOURS (docs/auth.md).
+    """
     token = request.cookies.get("__session")
     if not token:
         raise HTTPException(status_code=401, detail="Not signed in")
@@ -59,7 +70,11 @@ CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
 def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
-    """Resolve the local person using the linked EXPA identity."""
+    """The signed-in `person`, matched by their linked EXPA id (spec §9).
+
+    An ANONYMISED person never counts as a match: after a deletion request their
+    record must never sign anyone in again (spec §8).
+    """
     return (
         db.execute(
             select(Person).where(
@@ -76,12 +91,14 @@ CurrentPerson = Annotated[Person | None, Depends(get_current_person)]
 
 
 def get_today() -> date:
+    """Today's date, as a dependency so tests can fix the date
+    (`app.dependency_overrides[get_today] = lambda: date(...)`)."""
     return date.today()
 
 
 @dataclass(frozen=True)
 class CurrentActor:
-    """The authenticated person and their active memberships."""
+    """The signed-in person and their active memberships, for feature endpoints."""
 
     person: Person
     active_memberships: Sequence[Membership]
@@ -89,6 +106,11 @@ class CurrentActor:
 
 
 def get_current_actor(person: CurrentPerson, db: DbSession) -> CurrentActor:
+    """Resolve the authenticated actor and their active memberships.
+
+    Authentication is handled by CurrentPerson, which depends on the session from
+    CurrentUser. The acting membership is the one with the highest-ranked position.
+    """
     if person is None:
         raise HTTPException(
             status_code=401,

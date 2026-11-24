@@ -312,4 +312,3 @@ from the mock like everything else (`docs/frontend.md`).
 3. `make seed` (if you haven't) so there are custom fields to edit, then restart:
    `make down && make up`. Vite reads env vars only at startup.
 4. Sign in with Google. Profile now shows and saves your real fields.
-

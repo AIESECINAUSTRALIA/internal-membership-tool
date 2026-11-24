@@ -32,9 +32,11 @@ class UserSession(Base):
         nullable=False,
     )
 
+    # Indexed: `purge_stale_sessions` deletes by it on every sign-in.
     expires_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
+        index=True,
     )
 
     revoked_at: Mapped[datetime | None] = mapped_column(

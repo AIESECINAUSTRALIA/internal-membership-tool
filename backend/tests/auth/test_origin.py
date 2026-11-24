@@ -39,3 +39,34 @@ def test_non_get_requests_require_matching_origin(
             )
     finally:
         get_settings.cache_clear()
+
+
+def test_frontend_origin_is_allowed_with_trailing_slash_and_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Locally the browser app (FRONTEND_ORIGIN) is a different origin from the API
+    (APP_BASE_URL). Writes from it must pass, however the variables are spelled."""
+    monkeypatch.setenv("APP_BASE_URL", "http://localhost:8000/")
+    monkeypatch.setenv("FRONTEND_ORIGIN", "http://LocalHost:5173/")
+    get_settings.cache_clear()
+
+    try:
+        with TestClient(app) as client:
+            for origin in ("http://localhost:5173", "http://localhost:8000"):
+                response = client.post("/api/v1/auth/logout", headers={"Origin": origin})
+                assert response.status_code == 204, origin
+
+            assert (
+                client.post(
+                    "/api/v1/auth/logout",
+                    headers={"Origin": "http://localhost:3000"},
+                ).status_code
+                == 403
+            )
+    finally:
+        get_settings.cache_clear()
+
+
+def test_head_requests_skip_the_origin_check() -> None:
+    with TestClient(app) as client:
+        assert client.head("/healthz").status_code != 403

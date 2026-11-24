@@ -35,8 +35,9 @@ Spec: §9 (Authentication) and §2A.3 (Sign in).
   matches `person.expa_id`, falling back to an exact, case-insensitive
   `aiesec_email` match for an unlinked person.
 - A matched person with an active membership can sign in. An unmatched,
-  anonymised or unallocated person gets 403. DEV-83 will handle showing the
-  not-allocated page for that response.
+  anonymised or unallocated person gets no session and is redirected to
+  `/sign-in?error=not_allocated`, which shows the spec §2A.3 message. Every
+  other failed sign-in also redirects to `/sign-in?error=<reason>`.
 - The browser gets a 12-hour, server-side session through an HttpOnly
   `__session` cookie. EXPA tokens are discarded after the identity lookup.
 
@@ -63,7 +64,7 @@ Browser                    Our API (FastAPI)                 EXPA / GIS
    |                   match person + active membership            |
    |                   discard EXPA token                          |
    |                   rotate session token + write audit          |
-   |<------- __session cookie + redirect to application ----------|
+   |<---- __session cookie + redirect to FRONTEND_ORIGIN ----------|
    |                              |                               |
    | GET /api/v1/me (cookie)      |                               |
    |----------------------------->|                               |
@@ -121,16 +122,38 @@ to `aiesec.net` and accepts comma-separated domains. The match is exact:
 happens when EXPA returns the identity during sign-in, not through a
 frontend account-picker hint.
 
+It runs **once, at sign-in**, not on every request. Removing a domain from
+`ALLOWED_EMAIL_DOMAINS` therefore does not end sessions that already exist:
+they run out within `SESSION_TTL_HOURS` (12 by default). To cut someone off
+immediately, revoke their rows in `user_session`.
+
 **An `ANONYMISED` person can never sign in.** The callback rejects an
 anonymised record even when the EXPA ID matches. The anonymisation workflow
 must also clear `person.expa_id` when that workflow is implemented.
 
 **No allocation means no authenticated session.** The callback requires
 both a matching local person and at least one active membership. If either
-is missing, it returns 403 rather than issuing a session cookie. This is
-different from the old Supabase flow, where `/me` could return a successful
-response with `person: null`. DEV-83 needs to translate the new callback
-failure into the appropriate not-allocated experience.
+is missing, it issues no session cookie and redirects to
+`/sign-in?error=not_allocated`. This is different from the old Supabase
+flow, where `/me` could return a successful response with `person: null`.
+It lands on the sign-in page rather than `/not-allocated` because that
+page's route guard needs a signed-in user.
+
+**A failed callback always ends on a frontend page.** The callback is a page
+the browser visits, not an API call, so it never answers with JSON. Each
+failure redirects to `{FRONTEND_ORIGIN}/sign-in?error=<reason>`, and
+`SignInPage` shows a message for it:
+
+| `error=` | Meaning |
+|---|---|
+| `denied` | The person cancelled on EXPA's page |
+| `expired` | Missing, wrong or already-used state or pending cookie |
+| `expa` | EXPA could not be reached, or answered badly |
+| `domain` | The EXPA email is not in `ALLOWED_EMAIL_DOMAINS` |
+| `not_allocated` | No matching person, anonymised, or no active membership |
+
+The reasons are listed in `SignInError` (`backend/app/api/v1/auth.py`) and
+`SIGN_IN_ERRORS` (`frontend/src/pages/SignInPage.tsx`); keep the two in sync.
 
 **Permissions still come from the server.** `/me` returns the union of
 (resource, action, scope) grants across the person's active memberships,
@@ -147,22 +170,50 @@ state hash, creation and expiry timestamps, and an optional revocation
 timestamp. Raw tokens and state values are never stored. A pending OAuth
 session lasts one hour. After successful sign-in, the token is rotated and
 the authenticated session lasts 12 hours by default, without sliding
-renewal. The `__session` cookie uses HttpOnly, Secure, SameSite=Lax and
-Path=/.
+renewal. The `__session` cookie uses HttpOnly, SameSite=Lax and Path=/.
+It is also `Secure` whenever `APP_BASE_URL` is `https://` (every
+deployment). Locally over plain http it isn't, because Safari drops
+`Secure` cookies on `http://localhost`.
+
+**Old sessions are cleaned up automatically.** Every `GET /auth/login`
+first deletes expired and revoked rows (`purge_stale_sessions`), and a
+failed callback deletes its own pending row. No scheduled job is needed,
+and the table can't grow without bound even if someone calls the login URL
+in a loop: pending rows expire after an hour. `expires_at` is indexed for
+this. When the anonymisation workflow is built (Phase 2), it must also
+delete the person's `user_session` rows.
 
 **Each successful sign-in is written once to `audit_log`.** The callback
 uses `record_audit` with action `auth.sign_in`, the local person ID and
 `{"allocated": true}`. The identity link, authenticated session and audit
 entry are committed together. Calling `/me` repeatedly does not create
 more sign-in entries. The audit entry contains no email, OAuth code or
-session token. Rejected sign-ins do not create successful sign-in entries.
+session token.
 
-**Origin validation protects write requests.** For methods other than GET
-and OPTIONS, the backend requires an `Origin` header exactly matching
-`APP_BASE_URL`. A mismatch or missing Origin gets 403. OPTIONS is exempt
-so CORS preflight can run. The deployed application must serve its API
-through a compatible public origin; a frontend on a separate origin needs
-additional configuration rather than assuming CORS alone is sufficient.
+**Refused sign-ins are audited too, but only after EXPA has confirmed who the
+person is** (spec open question 17). A refused sign-in writes `auth.sign_in`
+with `{"allocated": false, "reason": ...}`:
+
+| `reason` | `resource_id` / `actor_person_id` |
+|---|---|
+| `domain` (email outside `ALLOWED_EMAIL_DOMAINS`) | none |
+| `not_allocated`, no person row or anonymised | none |
+| `not_allocated`, person exists but has no active membership | the person's id |
+
+The email is never stored. An anonymised person's id is left out so the record
+gains no new linked activity. Cancelled, expired-state and EXPA-error failures
+are **not** audited: anyone can trigger those in a loop without an EXPA
+account, and the audit log is permanent and append-only, so auditing them
+would let a script fill it.
+
+**Origin validation protects write requests.** Browsers attach cookies
+automatically, even to requests another website triggers, so a
+cookie-based session needs CSRF protection. For methods other than GET,
+HEAD and OPTIONS, the backend requires an `Origin` header matching either
+`FRONTEND_ORIGIN` or `APP_BASE_URL`, compared without a trailing slash and
+case-insensitively. A mismatch or missing Origin gets 403. Locally these
+are two different origins (Vite on :5173, the API on :8000). Deployed,
+Firebase serves both from one domain, so they are the same.
 
 **No backend sign-in stub.** API authentication requires a valid local
 session cookie. The backend no longer trusts Supabase JWTs or the old
@@ -186,10 +237,10 @@ variables.
 | `EXPA_GRAPHQL_URL` | GIS GraphQL endpoint |
 | `EXPA_CLIENT_ID` | Registered OAuth application ID |
 | `EXPA_CLIENT_SECRET` | OAuth client secret, backend only |
-| `APP_BASE_URL` | Public application origin used for the callback |
+| `APP_BASE_URL` | Public URL of the API, used to build the callback URL; `https://` turns on Secure cookies |
 | `SESSION_TTL_HOURS` | Fixed session lifetime, default 12 |
 | `ALLOWED_EMAIL_DOMAINS` | Exact permitted email domains |
-| `FRONTEND_ORIGIN` | Origin allowed by CORS |
+| `FRONTEND_ORIGIN` | Where the browser app runs: allowed by CORS and the Origin check, and where sign-in redirects to |
 
 The callback URL is built as:
 
@@ -214,11 +265,11 @@ browser sign-in can be tested.
 |---|---|
 | `GET /api/v1/me` without a cookie | 401 |
 | `GET /api/v1/auth/login` without EXPA credentials | 503 |
-| OAuth callback with missing or wrong state | 401 |
-| OAuth callback with a disallowed email domain | 403 |
-| OAuth callback for a person with no active membership | 403 |
-| Valid OAuth callback for an allocated person | Session cookie and redirect |
-| Reuse a consumed OAuth state | 401 |
+| OAuth callback with missing or wrong state | 302 to `/sign-in?error=expired` |
+| OAuth callback with a disallowed email domain | 302 to `/sign-in?error=domain` |
+| OAuth callback for a person with no active membership | 302 to `/sign-in?error=not_allocated`, no session |
+| Valid OAuth callback for an allocated person | Session cookie and 302 to `FRONTEND_ORIGIN` |
+| Reuse a consumed OAuth state | 302 to `/sign-in?error=expired` |
 | Request with an expired or revoked session | 401 |
 | POST with a missing or incorrect Origin | 403 |
 | Logout with a valid session | Session revoked; cookie cleared |

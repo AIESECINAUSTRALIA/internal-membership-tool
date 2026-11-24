@@ -1,4 +1,25 @@
-"""EXPA OAuth client and authentication helpers."""
+"""Talking to EXPA, AIESEC's own OAuth provider (spec §9). Read `docs/auth.md` first.
+
+Sign-in is the standard OAuth "authorization code" flow, run by the backend:
+
+1. `GET /auth/login` sends the browser to EXPA's sign-in page (`authorization_url`).
+2. EXPA sends the browser back to `GET /auth/callback?code=...&state=...`.
+3. The backend swaps the one-time `code` for an EXPA access token (`exchange_code`),
+   using our client secret, so the browser never sees the token.
+4. The backend asks EXPA's GraphQL API who that token belongs to
+   (`get_current_person`): their EXPA person id and AIESEC email.
+
+The EXPA access token is used for those two calls and then thrown away: we never
+store it and never call EXPA on the user's behalf afterwards. From then on the user
+is identified by our own session cookie (`app/core/sessions.py`).
+
+This module does NOT decide what the user may do. That is the permission matrix's
+job (spec §3), resolved from their `person` row and memberships.
+
+The HTTP calls are synchronous on purpose: the callback route is a plain `def`, which
+FastAPI runs in a worker thread, so the database work in the same route can't block
+other requests.
+"""
 
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -63,7 +84,7 @@ class ExpaOAuthClient:
         )
         return f"{self.settings.expa_auth_url.rstrip('/')}/oauth/authorize?{params}"
 
-    async def exchange_code(self, code: str) -> str:
+    def exchange_code(self, code: str) -> str:
         if not self.settings.expa_client_id or not self.settings.expa_client_secret:
             raise AuthError(503, "EXPA authentication is not configured")
 
@@ -76,8 +97,8 @@ class ExpaOAuthClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
+            with httpx.Client(timeout=15) as client:
+                response = client.post(
                     f"{self.settings.expa_auth_url.rstrip('/')}/oauth/token",
                     data=payload,
                 )
@@ -92,7 +113,7 @@ class ExpaOAuthClient:
 
         return token
 
-    async def get_current_person(self, access_token: str) -> ExpaIdentity:
+    def get_current_person(self, access_token: str) -> ExpaIdentity:
         query = """
         query GetCurrentPerson {
           currentPerson {
@@ -103,8 +124,8 @@ class ExpaOAuthClient:
         """
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.post(
+            with httpx.Client(timeout=15) as client:
+                response = client.post(
                     self.settings.expa_graphql_url,
                     json={"query": query},
                     headers={

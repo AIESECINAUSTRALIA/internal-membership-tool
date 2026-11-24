@@ -43,9 +43,11 @@ def upgrade() -> None:
         sa.UniqueConstraint("token_hash"),
         sa.UniqueConstraint("oauth_state_hash"),
     )
+    op.create_index("ix_user_session_expires_at", "user_session", ["expires_at"])
 
 
 def downgrade() -> None:
+    op.drop_index("ix_user_session_expires_at", table_name="user_session")
     op.drop_table("user_session")
     op.drop_constraint("uq_person_expa_id", "person", type_="unique")
     op.drop_column("person", "expa_id")

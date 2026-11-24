@@ -1,10 +1,27 @@
-"""Creation, validation and revocation of server-side sessions."""
+"""Server-side sessions for EXPA sign-in. Read `docs/auth.md` first.
+
+One `user_session` row goes through two stages:
+
+1. **Pending** (`person_id` is NULL): created by `GET /auth/login` before the browser
+   is sent to EXPA. It holds a hash of the OAuth `state` and of a cookie token, so the
+   callback can prove it is the same browser that started the sign-in (CSRF on login).
+2. **Active** (`person_id` set): after a successful callback the row is linked to the
+   person and given a fresh token. That token is the `__session` cookie.
+
+Only SHA-256 hashes of tokens are stored. Someone who reads the database (or a
+backup) can't use what they find there to sign in.
+
+Cleanup: rows that have expired or been revoked are deleted by
+`purge_stale_sessions`, which runs each time someone starts a sign-in. That keeps the
+table small without a scheduled job, even if someone calls `/auth/login` in a loop:
+pending rows expire after an hour.
+"""
 
 import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.user_session import UserSession
@@ -29,7 +46,12 @@ def create_pending_session(
     *,
     ttl_hours: int,
 ) -> tuple[UserSession, str, str]:
-    """Create a pending OAuth session and return its cookie token and state."""
+    """Create a pending OAuth session and return its cookie token and state.
+
+    Stale rows are purged first, in the same transaction.
+    """
+    purge_stale_sessions(db)
+
     token = generate_token()
     state = generate_token()
 
@@ -116,3 +138,36 @@ def revoke_session(db: Session, session: UserSession) -> None:
     """Invalidate a session immediately."""
     session.revoked_at = utc_now()
     db.commit()
+
+
+def purge_stale_sessions(db: Session) -> int:
+    """Delete expired and revoked sessions. Returns how many rows were deleted.
+
+    A consumed-but-unfinished pending row (its callback is running right now) is not
+    expired yet, so a concurrent sign-in never deletes it from under the callback.
+    The caller commits.
+    """
+    result = db.execute(
+        delete(UserSession).where(
+            or_(
+                UserSession.expires_at <= utc_now(),
+                UserSession.revoked_at.is_not(None),
+            )
+        )
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def delete_pending_session(db: Session, token: str) -> None:
+    """Delete the pending sign-in started with this cookie token, if any.
+
+    Called when a callback fails, so failed attempts don't leave rows behind. Only
+    pending rows (no person) match, so this can never end a real session. The
+    caller commits.
+    """
+    db.execute(
+        delete(UserSession).where(
+            UserSession.token_hash == hash_token(token),
+            UserSession.person_id.is_(None),
+        )
+    )
