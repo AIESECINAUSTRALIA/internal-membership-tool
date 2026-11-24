@@ -102,10 +102,18 @@ code or writing a migration.
   checking the permission matrix in a later ticket). It's unique and never
   changes.
 - `label` is what's shown in the UI. It can be renamed freely — nothing else
-  in the schema references it.
-- `position.rank` is a plain integer used only for UI ordering (lower number
-  = more senior, by convention — not enforced by the schema). It has no
-  effect on access control.
+  in the schema references it. Labels are unique ignoring case
+  (`uq_position_label_lower`, `uq_function_label_lower`), so "Member" and
+  "member" can't both exist.
+- `position.rank`: a **higher number is a higher position** (Member = 1 …
+  MCP = 7, spec §2). It drives the hierarchy rule (§3.4): you can only act on
+  someone whose position ranks below yours, and you can only edit a position
+  in the Admin console if it ranks below yours.
+- `position.level` (`'lc'` or `'mc'`) says which kind of entity the position
+  belongs to (§3.6). `position.can_add_same_rank` is the president exception
+  (§3.4): an LCP/MCP may add another holder of the same position. The
+  permission code reads both columns, and falls back to the position's key
+  only while a column is still empty.
 - `active` soft-disables a lookup value without breaking historical rows
   that already reference it (spec §1.5: "renaming or deactivating a lookup
   value must never break historical records that point at it").
@@ -547,8 +555,8 @@ the same PR.
 | `person.timezone` | Added, set from the LC of the most recent membership | Same (spec §4.1) |
 | `lc.state` | Added (nullable, FK to `state_timezone`) | Same (spec §4.1) |
 | `membership.end_date` | Nullable | Required when adding a membership (spec §5.3) |
-| `position.rank` | Lower number = more senior (LCP = 1) | Higher number = higher position (Member = 1 … MCP = 7) (spec §2) |
-| `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
+| `position.rank` | **Done** (DEV-0049, migration `b4e81d2c9a07`): higher number = higher position | Same (spec §2) |
+| `position.level`, `position.can_add_same_rank` | Added and filled in for the spec §2 keys (DEV-0049). No trigger yet | A trigger enforcing the level-match rule (spec §3.6, §3.4) |
 | Seeded positions | `lcp`, `lcvp`, `team_leader`, `member` | Also `mcd`, `mcvp`, `mcp`, with level and rank from spec §2 |
 | Seeded functions | Ten, including `igv`, `igte`, `mkt` | The fifteen in spec §2. No incoming functions |
 | `audit_log` protection | Application code only | DB-level: the runtime role `mt_runtime` gets only `INSERT`/`SELECT` on `audit_log`. Migrations run as a separate migrator role (spec §8.4; GCP design §5.3) |

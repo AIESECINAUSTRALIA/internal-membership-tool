@@ -37,7 +37,7 @@ screen.
 | 2 | Adding people and memberships, with start/end dates, and extending a term | Not written yet: the Memberships screen isn't built |
 | 3 | Term handover: who adds whom | Not written yet: needs the Memberships screen |
 | 4 | Changing permissions, and the "you can't grant what you don't hold" rule | Not written yet: the Permission matrix screen isn't built |
-| 5 | Adding or retiring a KPI, function or position | Not written yet: the Metrics & custom fields screen exists, so the KPI part can be written now |
+| 5 | [Adding or retiring a KPI, function or position](05-kpis-functions-positions.md) | Positions and functions written (screenshots still to take). The KPI part isn't written yet |
 | 6 | Processing a deletion request (the manual procedure for now) | Not written yet |
 | 7 | Reading the audit log | Not written yet: the Auditing screen isn't built |
 | 8 | Restoring from a backup | Not written yet: comes with the deployment work |

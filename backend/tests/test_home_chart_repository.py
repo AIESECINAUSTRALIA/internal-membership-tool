@@ -188,7 +188,7 @@ def test_month_starts_crosses_a_year_boundary() -> None:
 def _member(
     session: Session, *, email: str, lc: LC, function: Function, team_id: int | None = None
 ) -> Membership:
-    position = make_position(session, key=f"test_pos_{email}", label="Test", rank=1)
+    position = make_position(session, key=f"test_pos_{email}", label=f"Test {email}", rank=1)
     term = make_term(session, name=f"test-term-{email}")
     person = make_person(session, email=email)
     membership = make_membership(

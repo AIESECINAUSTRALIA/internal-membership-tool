@@ -355,6 +355,54 @@ export interface HomeChart {
 // its own query/row shape, no email exposed anywhere else in the app (§2A.5).
 // ---------------------------------------------------------------------------
 
+/** One row of the admin Positions screen. Carries the full set of editable fields
+ * (rank, level, canAddSameRank) that the main-app `Position` type omits. */
+export interface AdminPositionRow {
+  id: number
+  key: string
+  label: string
+  level: Level | null
+  rank: number | null
+  canAddSameRank: boolean
+  active: boolean
+}
+
+/** Level and rank are required: every position belongs to an LC or the MC (§3.6),
+ * and the hierarchy rule (§3.4) needs a rank. */
+export interface CreatePositionInput {
+  label: string
+  level: Level
+  rank: number
+  canAddSameRank?: boolean
+}
+
+/** Only present fields are changed. Level and rank can be changed but not cleared. */
+export interface UpdatePositionInput {
+  label?: string
+  level?: Level
+  rank?: number
+  canAddSameRank?: boolean
+  active?: boolean
+}
+
+/** One row of the admin Functions screen. */
+export interface AdminFunctionRow {
+  id: number
+  key: string
+  label: string
+  active: boolean
+}
+
+export interface CreateFunctionInput {
+  label: string
+}
+
+/** Only present fields are changed. */
+export interface UpdateFunctionInput {
+  label?: string
+  active?: boolean
+}
+
 /** One row of the admin People screen. Unlike `MemberSummaryRow`, this DOES carry
  * email (§1.5 "identified by AIESEC email") and includes people with no current
  * membership, since deactivating or fixing a past record is the point of the screen. */
@@ -427,6 +475,17 @@ export interface Api {
 
   // Admin console: People (§2A.2, §1.5).
   listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>>
+
+  // Admin console: Positions & functions (§2A.2, §1.5). Each change needs
+  // `manage` on `position` / `function` respectively.
+  /** Every position including inactive ones. */
+  listPositionsAdmin(): Promise<AdminPositionRow[]>
+  createPosition(input: CreatePositionInput): Promise<ActionResult>
+  updatePosition(positionId: number, changes: UpdatePositionInput): Promise<ActionResult>
+  /** Every function including inactive ones. */
+  listFunctionsAdmin(): Promise<AdminFunctionRow[]>
+  createFunction(input: CreateFunctionInput): Promise<ActionResult>
+  updateFunction(functionId: number, changes: UpdateFunctionInput): Promise<ActionResult>
 
   // Admin console: Metrics & custom fields (§1.5, §4.2). Each call needs `manage` on
   // `attribute`. The backend takes `function_id`; the real client maps it to `functionKey`.

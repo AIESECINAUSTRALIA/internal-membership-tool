@@ -43,7 +43,7 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
     label: 'Positions & functions',
     path: '/admin/positions-functions',
     requires: { resource: 'position', action: 'manage' },
-    built: false,
+    built: true,
   },
   {
     key: 'attributes',

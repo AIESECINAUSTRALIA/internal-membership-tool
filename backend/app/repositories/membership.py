@@ -11,7 +11,7 @@ drift out of sync.
 
 from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import record_audit
 from app.core.permissions import (
     POSITION_RANKS,
+    PRESIDENTIAL_POSITIONS,
     MembershipContext,
     can_add_member,
     can_extend_term,
@@ -54,10 +55,40 @@ def get_active_memberships_for_person(
     return session.execute(stmt).scalars().all()
 
 
-def _position_rank(pos: Position | None) -> int:
-    """`position.rank` when populated, else the spec §2 fallback by key."""
+# The three helpers below read a position's settings from the `position` table,
+# which admins edit on the Positions & functions screen (DEV-0049). Each falls back
+# to the hardcoded spec §2 values (by key) only while the column is still empty,
+# e.g. on a database that hasn't run migration b4e81d2c9a07 yet.
+
+
+def effective_position_rank(pos: Position | None) -> int:
+    """`position.rank` when set, else the spec §2 fallback by key.
+
+    Checked with `is not None` (not `or`) so a rank of 0 is used as-is.
+    """
+    if pos is not None and pos.rank is not None:
+        return pos.rank
     pos_key = pos.key if pos else "member"
-    return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    return POSITION_RANKS.get(pos_key, 1)
+
+
+def _position_can_add_same_rank(pos: Position | None) -> bool:
+    """The president exception (spec §3.4): `position.can_add_same_rank` when set,
+    else true only for the presidential keys."""
+    if pos is not None and pos.can_add_same_rank is not None:
+        return pos.can_add_same_rank
+    pos_key = pos.key if pos else "member"
+    return pos_key in PRESIDENTIAL_POSITIONS
+
+
+def _position_level(pos: Position) -> Literal["lc", "mc"]:
+    """Whether the position belongs to an LC or the MC (spec §3.6):
+    `position.level` when set, else decided by key."""
+    if pos.level == "lc":
+        return "lc"
+    if pos.level == "mc":
+        return "mc"
+    return position_level(pos.key)
 
 
 def person_name_parts(person: Person) -> tuple[str, str]:
@@ -88,8 +119,8 @@ def position_payload(pos: Position | None, lc: LC | None) -> dict[str, Any]:
         "key": pos_key,
         "label": pos.label if pos else pos_key,
         "level": "mc" if is_mc else "lc",
-        "rank": _position_rank(pos),
-        "canAddSameRank": getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"}),
+        "rank": effective_position_rank(pos),
+        "canAddSameRank": _position_can_add_same_rank(pos),
         "presidential": pos_key in {"lcp", "mcp"},
         "homeChartScope": home_chart_scope(pos_key),
         "holdsTeam": pos_key in {"member", "team_leader"},
@@ -127,8 +158,8 @@ def build_membership_context(session: Session, membership: Membership) -> Member
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
     pos_key = pos.key if pos else "member"
-    rank = _position_rank(pos)
-    can_add_same_rank = getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"})
+    rank = effective_position_rank(pos)
+    can_add_same_rank = _position_can_add_same_rank(pos)
 
     lc = session.get(LC, membership.lc_id)
     lc_type = lc.type.value if lc and hasattr(lc.type, "value") else "LC"
@@ -358,6 +389,10 @@ def add_member(
     pos = session.execute(select(Position).where(Position.key == position_key)).scalar_one_or_none()
     if not pos:
         return {"status": "rejected", "message": "Position not found."}
+    # An inactive position stays on existing memberships but is never given out
+    # again (spec §1.5). Same rule as inactive LCs above.
+    if not pos.active:
+        return {"status": "rejected", "message": "That position is inactive."}
 
     func = None
     if function_key:
@@ -366,6 +401,8 @@ def add_member(
         ).scalar_one_or_none()
         if func is None:
             return {"status": "rejected", "message": "Function not found."}
+        if not func.active:
+            return {"status": "rejected", "message": "That function is inactive."}
 
     # Authorise before touching the person table: a denied actor must not be able
     # to probe which emails exist (via `confirm_existing`). Spec §3.4, §3.6.
@@ -374,8 +411,8 @@ def add_member(
         target_lc_id=lc.id,
         target_lc_type=lc.type.value,
         target_position_key=pos.key,
-        target_position_rank=_position_rank(pos),
-        target_position_level=position_level(pos.key),
+        target_position_rank=effective_position_rank(pos),
+        target_position_level=_position_level(pos),
         target_function_id=func.id if func else None,
         target_team_id=team_id,
     )

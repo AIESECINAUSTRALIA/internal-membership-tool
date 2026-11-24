@@ -65,10 +65,10 @@ def seeded(db_session: Session) -> Seeded:
     inactive_lc = make_lc(db_session, name="test_ref_closed")
     inactive_lc.active = False
     term = make_term(db_session, name="test_ref_term")
-    ogv = make_function(db_session, key="test_ref_ogv", label="oGV")
+    ogv = make_function(db_session, key="test_ref_ogv", label="Test oGV")
     bnm = make_function(db_session, key="test_ref_bnm", label="BnM")
     leader_person = make_person(db_session, full_name="Jane Leader", email="test_ref_tl@aiesec.net")
-    position = make_position(db_session, key="test_ref_tl", label="Team Leader", rank=3)
+    position = make_position(db_session, key="test_ref_tl", label="Test Team Leader", rank=3)
     leader = make_membership(
         db_session, person=leader_person, lc=lc, position=position, term=term, function=ogv
     )

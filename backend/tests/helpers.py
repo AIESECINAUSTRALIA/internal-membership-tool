@@ -1,7 +1,8 @@
 """Shared test helper functions.
 
-All lookup keys use a ``test_`` prefix so they never collide with seed data
-in local environments (where ``make seed`` has already populated the DB).
+All lookup keys use a ``test_`` prefix, and labels a "Test" prefix, so they never
+collide with seed data in local environments (where ``make seed`` has already
+populated the DB). Labels must not collide either: they are unique, ignoring case.
 """
 
 from datetime import date, timedelta
@@ -147,7 +148,7 @@ def make_team(
 def make_person_and_recorder(session: Session) -> tuple[Person, int]:
     """A person plus a membership id to use as recorded_by in attribute tests."""
     lc = make_lc(session)
-    position = make_position(session, key="test_lcvp", label="LC Vice President", rank=2)
+    position = make_position(session, key="test_lcvp", label="Test LC Vice President", rank=2)
     term = make_term(session)
     person = make_person(session)
     recorder = make_membership(session, person=person, lc=lc, position=position, term=term)

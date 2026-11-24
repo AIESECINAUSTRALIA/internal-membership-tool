@@ -539,6 +539,32 @@ def test_add_member_rejects_inactive_lc(client_with_actor: Fixture, db_session: 
     assert _create_audit_count(db_session) == 0
 
 
+def test_add_member_rejects_inactive_position(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.pos_member.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That position is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_rejects_inactive_function(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.fn_ogv.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That function is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
 # ---------------------------------------------------------------------------
 # Test: detail endpoint respects LC isolation; unallocated actors get nothing
 # ---------------------------------------------------------------------------
