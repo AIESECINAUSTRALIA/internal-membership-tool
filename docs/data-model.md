@@ -17,6 +17,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `privacy.py` | `audit_log` (later also `deletion_request`) |
 | `attribute.py` | `attribute`, `attribute_value` |
 | `kpi.py` | `kpi_record`, `home_chart_default` |
+| `user_session.py` | `user_session` |
 
 This grouping isn't enforced by anything — it's a convention matching the
 spec's own section breakdown (org-structural lookups vs. the person record
@@ -120,8 +121,8 @@ to a person only indirectly, through `membership`.
 
 - `aiesec_email` is unique and is the join key used when someone logs in via
   OAuth (spec §9): the verified email from the identity provider is matched
-  against this column to resolve who's signed in. With EXPA sign-in (planned, see
-  "Known differences" below), it's the **first-sign-in** match. After that the person is
+  against this column to resolve who's signed in. With EXPA sign-in,
+  it's the **first-sign-in** match. After that the person is
   matched by `expa_id`.
 - `status` (`ACTIVE` / `ALUMNUS` / `INACTIVE` / `ANONYMISED`) is a fixed
   lifecycle state, not an admin-editable lookup like `position`/`function` —
@@ -132,6 +133,45 @@ to a person only indirectly, through `membership`.
   (spec §8.2). The actual deletion-request workflow is a separate ticket;
   this column exists now because it's part of the `person` table's shape per
   spec §4.1.
+
+#### EXPA identity
+
+Migration `39a779be658e` adds `person.expa_id`, a nullable,
+unique string containing the person's stable EXPA identifier.
+
+At first successful EXPA sign-in, the backend matches the verified
+AIESEC email to an unlinked local person with an active membership.
+It then stores the EXPA ID.
+
+Subsequent sign-ins match by EXPA ID first, rather than relying
+on email remaining unchanged.
+
+Anonymised people cannot authenticate. The anonymisation workflow
+must clear `expa_id` when implemented.
+
+### `user_session`
+
+Added by migration `39a779be658e`.
+
+Stores pending OAuth attempts and authenticated server-side sessions.
+
+| Column | Purpose |
+|---|---|
+| `id` | Internal primary key |
+| `token_hash` | Unique SHA-256 hash of the session cookie token |
+| `person_id` | Nullable FK to `person`; null during pending OAuth |
+| `oauth_state_hash` | Nullable unique SHA-256 hash of OAuth state |
+| `created_at` | Session creation time |
+| `expires_at` | Absolute expiration time |
+| `revoked_at` | Nullable revocation timestamp |
+
+Raw session tokens and OAuth state values are never stored.
+
+A successful OAuth callback rotates the pending session token,
+links the authenticated person, and establishes a fixed 12-hour
+session by default.
+
+Logout revokes the session. Expired or revoked sessions are rejected.
 
 ### `membership`
 
@@ -348,6 +388,42 @@ or moved to another function until that default is changed. Moving it to the sam
 function or making it shared (`function_id` null) is fine, because the default still
 works (docs/home-chart.md).
 
+### Editing your own custom fields (Profile, spec §2A.9)
+
+Everyone can edit their own **person-level** custom fields on the Profile page,
+through `GET` and `PATCH /api/v1/me/custom-fields` (`backend/app/api/v1/me.py`, logic
+in `backend/app/repositories/person.py`). They are separate from `GET /api/v1/me`
+(the sign-in check, `auth.py`) so a problem with the attribute catalog can never stop
+anyone signing in. Profile's position history has its own route for the same reason,
+`GET /api/v1/me/memberships` (`membership_history` in `person.py`): every membership
+the person has held, past, current and future, newest first. `/me` itself lists only
+**active** memberships, because only those grant access (§3.2); the history is for
+display and grants nothing. The decisions, and why:
+
+- **Only your own record.** The endpoint takes no person id. The person is always
+  the signed-in actor, so there is no input that could point it at someone else.
+  The rank check (§3.4) doesn't apply, because you are always acting on yourself.
+  The endpoint still checks `member_record:edit` in the permission matrix, so the
+  rule stays data, not code.
+- **Locked fields are rejected, not ignored.** The body is `{attribute_key: value}`.
+  Only keys of active `attribute` rows with `applies_to = 'person'` (and, for a
+  function-scoped attribute, only if you're currently in that function) are
+  accepted. Anything else, such as `full_name`, `aiesec_email`, membership fields,
+  dates or another person's id, gets a 422 and **nothing** is saved. Name, email,
+  membership and dates are changed by an admin (§2A.2).
+- **All or nothing.** Every field is validated before any is written, and the
+  values and the audit entry share one transaction.
+- **Unchanged values aren't rewritten**, so `recorded_at` keeps meaning "last
+  changed", and saving without changes writes no audit entry.
+- **The audit entry lists which keys changed, never their values.** Custom
+  fields (dietary needs, shirt size) are personal data, and `audit_log` can never
+  be edited or deleted (§8.4), so a value written there could never be removed,
+  even by a deletion request. The entry is `action = 'person.edit'`,
+  `diff = {"changed_keys": [...]}`.
+- **`recorded_by`** is the person's acting membership (their highest-ranked
+  active one, as chosen in `app/api/deps.py`). A person with no active membership
+  can't edit (403). They see the not-allocated page anyway.
+
 ## `kpi_record`
 
 KPIs are catalogued in `attribute` like any other volatile field (`applies_to =
@@ -475,8 +551,6 @@ the same PR.
 | `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
 | Seeded positions | `lcp`, `lcvp`, `team_leader`, `member` | Also `mcd`, `mcvp`, `mcp`, with level and rank from spec §2 |
 | Seeded functions | Ten, including `igv`, `igte`, `mkt` | The fifteen in spec §2. No incoming functions |
-| `person.expa_id` | Absent | Added (unique, nullable): EXPA's person id, stored on first EXPA sign-in. **Anonymisation sets it to `NULL`** (spec §8.2) |
-| `user_session` | Absent | Added: our own server-side sign-in sessions. Stores a SHA-256 of the cookie token (never the token), `person_id`, pending OAuth `state`, `created_at`, `expires_at` (12 h), `revoked_at` (spec §9) |
 | `audit_log` protection | Application code only | DB-level: the runtime role `mt_runtime` gets only `INSERT`/`SELECT` on `audit_log`. Migrations run as a separate migrator role (spec §8.4; GCP design §5.3) |
 
 Two things to watch when fixing the seeds:
@@ -504,7 +578,9 @@ goes in `privacy.py`, next to `audit_log`. Build them to the spec directly.
 `validate_and_coerce`) — see "EAV" above for why writes must go through here
 rather than constructing rows directly — and for the catalog itself
 (`list_attributes`, `create_attribute`, `update_attribute`,
-`deactivate_attribute`, `activate_attribute`; see "Editing the catalog"). `backend/app/repositories/kpi.py`
+`deactivate_attribute`, `activate_attribute`; see "Editing the catalog").
+`backend/app/repositories/person.py` reads and edits the signed-in person's own
+custom fields and lists their position history (see "Editing your own custom fields" above). `backend/app/repositories/kpi.py`
 is the write path and rollup query for `kpi_record` (`record_kpi`,
 `sum_by_function`). As more tickets add read patterns (e.g. "all memberships
 for an LC", "who leads this team"), add functions to the relevant file

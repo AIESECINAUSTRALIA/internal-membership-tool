@@ -1,8 +1,9 @@
 /**
  * Real HTTP implementation of the `Api` interface (Spec §2A.5 — ticket DEV-0043).
  *
- * Only the five membership-summary methods are wired to the real backend:
- *   listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam
+ * Wired to the real backend so far:
+ *   listMembers, addMember, getMembershipDetail, extendTerm, moveToTeam (§2A.5)
+ *   getMyCustomFields, updateMyCustomFields, getMyMembershipHistory (Profile, §2A.9 — DEV-0045)
  *
  * Every other method comes from `options.fallback` (today, the mock), so the rest
  * of the app keeps running while those backend tickets are still in progress.
@@ -19,6 +20,9 @@
  *   GET  /api/v1/members/:id               → getMembershipDetail
  *   POST /api/v1/members/:id/extend-term   → extendTerm
  *   POST /api/v1/members/:id/move-to-team  → moveToTeam
+ *   GET  /api/v1/me/custom-fields          → getMyCustomFields
+ *   PATCH /api/v1/me/custom-fields         → updateMyCustomFields
+ *   GET  /api/v1/me/memberships            → getMyMembershipHistory
  */
 
 import type {
@@ -30,6 +34,9 @@ import type {
   AddMemberInput,
   AddMemberResult,
   Api,
+  CustomField,
+  CustomFieldValue,
+  MembershipView,
   IsoDate,
   MemberQuery,
   MembershipDetail,
@@ -78,23 +85,36 @@ export interface HttpApiOptions {
 /** A non-2xx answer from the backend. `status` lets callers word the error. */
 export class HttpError extends Error {
   readonly status: number
+  /** The server's own explanation (FastAPI's `{"detail": "..."}`), when it gave one. */
+  readonly detail: string | null
 
   constructor(method: string, path: string, status: number, text: string) {
     super(`${method} ${path} → ${status}: ${text}`)
     this.name = 'HttpError'
     this.status = status
+    this.detail = detailFrom(text)
+  }
+}
+
+function detailFrom(text: string): string | null {
+  try {
+    const detail: unknown = JSON.parse(text)?.detail
+    return typeof detail === 'string' ? detail : null
+  } catch {
+    return null
   }
 }
 
 interface Transport {
   post<T>(path: string, body: unknown): Promise<T>
+  patch<T>(path: string, body: unknown): Promise<T>
   get<T>(path: string): Promise<T>
 }
 
 function createTransport(options: HttpApiOptions): Transport {
   const baseUrl = options.baseUrl ?? import.meta.env.VITE_API_URL ?? ''
 
-  async function request<T>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<T> {
+  async function request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
     const headers = { 'Content-Type': 'application/json', ...(await options.getAuthHeaders()) }
     const res = await fetch(`${baseUrl}${path}`, {
       method,
@@ -110,6 +130,7 @@ function createTransport(options: HttpApiOptions): Transport {
 
   return {
     post: (path, body) => request('POST', path, body),
+    patch: (path, body) => request('PATCH', path, body),
     get: (path) => request('GET', path),
   }
 }
@@ -148,7 +169,7 @@ function idPath(membershipId: string): string {
 
 /**
  * Creates an `Api` implementation that:
- * - Calls the real FastAPI backend for all five membership-summary methods.
+ * - Calls the real FastAPI backend for the membership-summary and Profile methods.
  * - Uses `options.fallback` for everything else (getMe, signIn, signOut, admin, …).
  */
 export function createHttpApi(options: HttpApiOptions): Api {
@@ -236,6 +257,23 @@ export function createHttpApi(options: HttpApiOptions): Api {
       )
       if (result.status === 'ok') return { status: 'ok' }
       return { status: 'rejected', message: result.message ?? 'Unknown error' }
+    },
+
+    // -------------------------------------------------------------------
+    // Profile — REAL backend (Spec §2A.9)
+    // -------------------------------------------------------------------
+
+    async getMyCustomFields(): Promise<CustomField[]> {
+      return http.get<CustomField[]>('/api/v1/me/custom-fields')
+    },
+
+    async getMyMembershipHistory(): Promise<MembershipView[]> {
+      return http.get<MembershipView[]>('/api/v1/me/memberships')
+    },
+
+    /** Throws `HttpError` when the save is refused; a 422's `detail` says which field. */
+    async updateMyCustomFields(values: Record<string, CustomFieldValue>): Promise<CustomField[]> {
+      return http.patch<CustomField[]>('/api/v1/me/custom-fields', values)
     },
   }
 }

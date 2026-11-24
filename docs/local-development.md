@@ -18,6 +18,21 @@ Two ways to run the stack locally:
 Every path needs the `.env` file first — `cp .env.example .env` (see
 [Environment variables & secrets](#environment-variables--secrets)).
 
+> **Authentication transition (DEV-82 / DEV-83).** The backend now uses
+> EXPA OAuth and server-side sessions instead of Supabase JWTs.
+> Backend configuration uses `EXPA_AUTH_URL`, `EXPA_GRAPHQL_URL`,
+> `EXPA_CLIENT_ID`, `EXPA_CLIENT_SECRET`, `APP_BASE_URL`,
+> `SESSION_TTL_HOURS` and `ALLOWED_EMAIL_DOMAINS`.
+>
+> The frontend still uses Supabase until DEV-83. Its existing
+> `VITE_SUPABASE_*` and `VITE_AUTH_MODE` instructions are retained
+> for reference, but real frontend authentication will not work
+> against the new backend until DEV-83 is merged.
+>
+> Backend tests mock EXPA and require no real OAuth credentials.
+> Live EXPA authentication requires an HTTPS callback registered
+> with EXPA and matching deployment configuration.
+
 ### Prerequisites
 
 | | Docker path | Manual path |
@@ -165,10 +180,6 @@ Then fill in `.env`:
 - **Postgres vars** (`POSTGRES_*`, `DATABASE_URL`) — leave the placeholder
   values as-is. The local database is a throwaway Docker container; these are
   not secrets.
-- **`DEV_ACTOR_HEADER_ENABLED`** — leave `false`. Setting it to `true` makes the
-  backend trust an `X-Actor-Email` request header as the signed-in user, so you can
-  `curl` the membership API before real sign-in (ticket 7) exists. Local use only:
-  never set it in a deployed environment. The tests do not need it.
 - **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
   from the shared store (below), not by asking in Slack. *(Being replaced by `EXPA_*`
   settings when EXPA sign-in lands. Until then, `VITE_AUTH_MODE=mock` needs none of
@@ -271,3 +282,33 @@ rotate its keys if the person had them.
 
 Rotate immediately, out of cycle, if a secret is ever committed, pasted into a
 chat or ticket, or otherwise exposed.
+
+---
+
+## Using the real backend for Profile
+
+Profile's custom fields (`getMyCustomFields`, `updateMyCustomFields`) come from the real
+API whenever you sign in for real (`VITE_AUTH_MODE=supabase`). In `mock` mode they come
+from the mock like everything else (`docs/frontend.md`).
+
+1. Set up real sign-in once: `docs/auth.md`, "One-time setup (Supabase + Google)".
+2. The seeds don't create people, LCs or terms, so add yourself once, with the
+   `@aiesec.net` email you sign in with:
+
+   ```bash
+   docker compose exec db psql -U membership -d membership -c "
+     INSERT INTO lc (name, type, active) VALUES ('Dev LC', 'LC', true);
+     INSERT INTO term (name, start_date, end_date) VALUES ('Dev term', '2026-01-01', '2026-12-31');
+     INSERT INTO person (full_name, aiesec_email, join_date, status, timezone)
+       VALUES ('Your Name', 'you@aiesec.net', '2026-01-01', 'ACTIVE', 'Australia/Melbourne');
+     INSERT INTO membership (person_id, lc_id, position_id, term_id, start_date, end_date, is_primary)
+       SELECT p.id, l.id, pos.id, t.id, '2026-01-01', '2026-12-31', true
+       FROM person p, lc l, position pos, term t
+       WHERE p.aiesec_email = 'you@aiesec.net' AND l.name = 'Dev LC'
+         AND pos.key = 'member' AND t.name = 'Dev term';"
+   ```
+
+   Make sure the membership dates cover today, or you'll land on the not-allocated page.
+3. `make seed` (if you haven't) so there are custom fields to edit, then restart:
+   `make down && make up`. Vite reads env vars only at startup.
+4. Sign in with Google. Profile now shows and saves your real fields.

@@ -150,9 +150,9 @@ export interface Me {
     lastName: string
     /** Shown on Profile only. Never shown on the Membership summary (§2A.5). */
     email: string
-    customFields: CustomField[]
   }
-  /** Current, past and future memberships. Filter with `isActive` before using for access. */
+  /** ACTIVE memberships only: the ones that grant access (§3.2). Empty means not
+   * allocated (§9). The full history is `getMyMembershipHistory`. */
   memberships: MembershipView[]
   /** Every grant, already resolved by the server (§3.2). */
   permissions: Permission[]
@@ -394,8 +394,15 @@ export interface Api {
   onSessionChange?(listener: () => void): () => void
 
   // Profile
-  /** Person-level custom fields only. Names, email, membership and dates are locked (§2A.9). */
-  updateMyCustomFields(values: Record<string, CustomFieldValue>): Promise<Me>
+  /** Your own person-level custom fields and their values (§2A.9). Separate from `getMe`
+   * so a failure here never blocks sign-in. */
+  getMyCustomFields(): Promise<CustomField[]>
+  /** Every membership you have held, past, current and future, newest first (§2A.9).
+   * Display only: access comes from `Me.memberships`. */
+  getMyMembershipHistory(): Promise<MembershipView[]>
+  /** Person-level custom fields only. Names, email, membership and dates are locked (§2A.9).
+   * Returns the fields as saved. Throws when the server rejects the values. */
+  updateMyCustomFields(values: Record<string, CustomFieldValue>): Promise<CustomField[]>
 
   // Membership summary
   getReferenceData(): Promise<ReferenceData>
