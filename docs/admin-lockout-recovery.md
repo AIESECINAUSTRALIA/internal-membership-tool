@@ -4,7 +4,7 @@
 **Date:** 2026-11-16
 **Resolves:** spec §12 #21 ("admin lockout recovery: approach still to be chosen").
 **Becomes:** admin guide 9 (spec §10A), once the admin guide folder lands (DEV-67).
-**Builds on:** `2026-11-09-gcp-deployment-design.md` §5.3 (Cloud SQL) and §10 (IAM and
+**Builds on:** `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md` §5.3 (Cloud SQL) and §10 (IAM and
 access), which DEV-78 sets up.
 
 Written for a reader with no prior context. Anything marked **[verify]** is a behaviour or
@@ -43,7 +43,8 @@ for someone who has never seen the system.
   single point of failure).
 - Every use leaves a trace: an `audit_log` entry for the data change, and an incident-log
   entry for the whole event.
-- Copy-paste SQL that is **tested in CI**, so it can't quietly break as the schema changes.
+- Copy-paste SQL that **will be tested in CI** (added with guide 9, §8), so it can't
+  quietly break as the schema changes.
 
 **Non-goals**
 - New app code. Recovery uses the database and GCP access the deployment design already
@@ -323,7 +324,7 @@ You should see exactly one row returned, followed by `INSERT 0 1`.
 1. Run step 1 again. The membership should show `active_today = t`.
 2. Ask the restored admin to sign in at `/admin/sign-in`. **This is the real check.** If
    they still can't get in, the problem isn't the membership: check their sign-in in the
-   audit log and the runbook's "everyone gets not-allocated" entry.
+   audit log and the not-allocated rules in `docs/auth.md`.
 3. Write the incident-log entry (`docs/incident-response.md` holds the template once it's
    written; until then, a document in the MC shared drive). Record:
    - incident id, date and time
@@ -461,7 +462,8 @@ Prevention lowers how often this happens. It doesn't replace the procedure.
 - End date: the real term end when fixing the current admin; 14 days when restoring the
   outgoing admin for a handover.
 - Restore the rightful MC admin, not the tech team.
-- The SQL is tested in CI, and Tier 1 is rehearsed on dev once per term.
+- The SQL will be tested in CI (added with guide 9, §8), and Tier 1 is rehearsed on dev
+  once per term.
 
 **Open:**
 - Is `hello@` a Workspace super admin today? Whoever runs Workspace for the national team
