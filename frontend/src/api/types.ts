@@ -367,18 +367,20 @@ export interface AdminPositionRow {
   active: boolean
 }
 
+/** Level and rank are required: every position belongs to an LC or the MC (§3.6),
+ * and the hierarchy rule (§3.4) needs a rank. */
 export interface CreatePositionInput {
   label: string
-  level?: Level | null
-  rank?: number | null
+  level: Level
+  rank: number
   canAddSameRank?: boolean
 }
 
-/** Only present fields are changed. */
+/** Only present fields are changed. Level and rank can be changed but not cleared. */
 export interface UpdatePositionInput {
   label?: string
-  level?: Level | null
-  rank?: number | null
+  level?: Level
+  rank?: number
   canAddSameRank?: boolean
   active?: boolean
 }

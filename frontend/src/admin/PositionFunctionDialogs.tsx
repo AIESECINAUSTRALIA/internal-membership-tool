@@ -1,81 +1,66 @@
-import {
-  Alert,
-  Button,
-  Checkbox,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  MenuItem,
-  Stack,
-  TextField,
-  Typography,
-} from '@mui/material'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { Checkbox, FormControlLabel, MenuItem, TextField, Typography } from '@mui/material'
+import { useState } from 'react'
 
 import { useApi } from '../api/ApiContext'
-import type { AdminFunctionRow, AdminPositionRow } from '../api/types'
-
-interface DialogProps {
-  onClose: () => void
-  onDone: () => void
-}
+import type { AdminFunctionRow, AdminPositionRow, Level } from '../api/types'
+import { AdminDialogFrame, type AdminDialogProps } from './AdminDialogFrame'
 
 /**
- * Shared dialog frame used by every position/function dialog: title, form body,
- * Cancel/submit buttons, and an error banner. `submit` returns an error message or null.
+ * The dialogs of the Positions & functions screen (spec §1.5, §2A.2). They all use the
+ * shared `AdminDialogFrame`, like the LC and Metrics dialogs. The server re-checks
+ * every rule; the dialogs only stop obviously incomplete forms from being sent.
  */
-function DialogFrame({
-  title,
-  submitLabel,
-  canSubmit,
-  submit,
-  onClose,
-  onDone,
-  children,
-}: DialogProps & {
-  title: string
-  submitLabel: string
-  canSubmit: boolean
-  submit: () => Promise<string | null>
-  children: ReactNode
+
+/** The highest rank the signed-in admin may give a position: one below their own (§3.4). */
+interface RankLimit {
+  maxRank: number
+}
+
+/** A whole number from 1 up to `maxRank`, or null if the field isn't one yet. */
+function parseRank(value: string, maxRank: number): number | null {
+  const rank = Number(value)
+  if (value.trim() === '' || !Number.isInteger(rank) || rank < 1 || rank > maxRank) return null
+  return rank
+}
+
+/** The Level, Rank and president-exception fields shared by Add and Edit details. */
+function PositionDetailsFields({
+  level,
+  setLevel,
+  rank,
+  setRank,
+  canAddSameRank,
+  setCanAddSameRank,
+  maxRank,
+}: {
+  level: Level | ''
+  setLevel: (level: Level | '') => void
+  rank: string
+  setRank: (rank: string) => void
+  canAddSameRank: boolean
+  setCanAddSameRank: (value: boolean) => void
+  maxRank: number
 }) {
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setError(null)
-    const message = await submit()
-    setBusy(false)
-    if (message !== null) {
-      setError(message)
-      return
-    }
-    onDone()
-    onClose()
-  }
-
   return (
-    <Dialog open onClose={onClose} maxWidth="xs" fullWidth>
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>{title}</DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ pt: 1 }}>
-            {error && <Alert severity="error">{error}</Alert>}
-            {children}
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2 }}>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained" disabled={!canSubmit || busy}>
-            {submitLabel}
-          </Button>
-        </DialogActions>
-      </form>
-    </Dialog>
+    <>
+      <TextField select required label="Level" value={level} onChange={(e) => setLevel(e.target.value as Level | '')}>
+        <MenuItem value="lc">LC</MenuItem>
+        <MenuItem value="mc">MC</MenuItem>
+      </TextField>
+      <TextField
+        required
+        label="Rank"
+        type="number"
+        value={rank}
+        onChange={(e) => setRank(e.target.value)}
+        helperText={`A higher number is a more senior position. You can set 1 to ${maxRank}, below your own position.`}
+        slotProps={{ htmlInput: { min: 1, max: maxRank } }}
+      />
+      <FormControlLabel
+        control={<Checkbox checked={canAddSameRank} onChange={(e) => setCanAddSameRank(e.target.checked)} />}
+        label="People in this position can add another person to the same position (like the LC President)"
+      />
+    </>
   )
 }
 
@@ -83,48 +68,43 @@ function DialogFrame({
 // Position dialogs
 // ---------------------------------------------------------------------------
 
-export function AddPositionDialog(props: DialogProps) {
+export function AddPositionDialog({ maxRank, ...props }: AdminDialogProps & RankLimit) {
   const api = useApi()
   const [label, setLabel] = useState('')
-  const [level, setLevel] = useState<'lc' | 'mc' | ''>('')
+  const [level, setLevel] = useState<Level | ''>('')
   const [rank, setRank] = useState('')
   const [canAddSameRank, setCanAddSameRank] = useState(false)
+  const parsedRank = parseRank(rank, maxRank)
 
   const submit = async () => {
-    const result = await api.createPosition({
-      label,
-      level: level || null,
-      rank: rank ? parseInt(rank, 10) : null,
-      canAddSameRank,
-    })
+    if (level === '' || parsedRank === null) return 'Choose a level and a rank.'
+    const result = await api.createPosition({ label, level, rank: parsedRank, canAddSameRank })
     return result.status === 'ok' ? null : result.message
   }
 
   return (
-    <DialogFrame {...props} title="Add position" submitLabel="Add position" canSubmit={label.trim() !== ''} submit={submit}>
+    <AdminDialogFrame
+      {...props}
+      title="Add position"
+      submitLabel="Add position"
+      canSubmit={label.trim() !== '' && level !== '' && parsedRank !== null}
+      submit={submit}
+    >
       <TextField required autoFocus label="Name" value={label} onChange={(e) => setLabel(e.target.value)} />
-      <TextField select label="Level" value={level} onChange={(e) => setLevel(e.target.value as 'lc' | 'mc' | '')}>
-        <MenuItem value="">Not set</MenuItem>
-        <MenuItem value="lc">LC</MenuItem>
-        <MenuItem value="mc">MC</MenuItem>
-      </TextField>
-      <TextField
-        label="Rank"
-        type="number"
-        value={rank}
-        onChange={(e) => setRank(e.target.value)}
-        helperText="Higher number = more senior (§2). Leave blank if not yet decided."
-        inputProps={{ min: 1 }}
+      <PositionDetailsFields
+        level={level}
+        setLevel={setLevel}
+        rank={rank}
+        setRank={setRank}
+        canAddSameRank={canAddSameRank}
+        setCanAddSameRank={setCanAddSameRank}
+        maxRank={maxRank}
       />
-      <FormControlLabel
-        control={<Checkbox checked={canAddSameRank} onChange={(e) => setCanAddSameRank(e.target.checked)} />}
-        label="Can add another holder of the same position (president exception, §3.4)"
-      />
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
-export function RenamePositionDialog({ position, ...props }: DialogProps & { position: AdminPositionRow }) {
+export function RenamePositionDialog({ position, ...props }: AdminDialogProps & { position: AdminPositionRow }) {
   const api = useApi()
   const [label, setLabel] = useState(position.label)
 
@@ -134,7 +114,7 @@ export function RenamePositionDialog({ position, ...props }: DialogProps & { pos
   }
 
   return (
-    <DialogFrame
+    <AdminDialogFrame
       {...props}
       title={`Rename "${position.label}"`}
       submitLabel="Rename"
@@ -143,47 +123,47 @@ export function RenamePositionDialog({ position, ...props }: DialogProps & { pos
     >
       <TextField required autoFocus label="Name" value={label} onChange={(e) => setLabel(e.target.value)} />
       <Typography variant="body2" color="text.secondary">
-        The new name shows everywhere. The key code and all membership history are unaffected.
+        The new name shows everywhere. Everyone&rsquo;s membership history keeps this position.
       </Typography>
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
-export function EditPositionDetailsDialog({ position, ...props }: DialogProps & { position: AdminPositionRow }) {
+export function EditPositionDetailsDialog({
+  position,
+  maxRank,
+  ...props
+}: AdminDialogProps & RankLimit & { position: AdminPositionRow }) {
   const api = useApi()
-  const [level, setLevel] = useState<string>(position.level ?? '')
+  const [level, setLevel] = useState<Level | ''>(position.level ?? '')
   const [rank, setRank] = useState(position.rank !== null ? String(position.rank) : '')
   const [canAddSameRank, setCanAddSameRank] = useState(position.canAddSameRank)
+  const parsedRank = parseRank(rank, maxRank)
 
   const submit = async () => {
-    const result = await api.updatePosition(position.id, {
-      level: (level as 'lc' | 'mc') || null,
-      rank: rank ? parseInt(rank, 10) : null,
-      canAddSameRank,
-    })
+    if (level === '' || parsedRank === null) return 'Choose a level and a rank.'
+    const result = await api.updatePosition(position.id, { level, rank: parsedRank, canAddSameRank })
     return result.status === 'ok' ? null : result.message
   }
 
   return (
-    <DialogFrame {...props} title={`Edit details — ${position.label}`} submitLabel="Save" canSubmit submit={submit}>
-      <TextField select label="Level" value={level} onChange={(e) => setLevel(e.target.value)}>
-        <MenuItem value="">Not set</MenuItem>
-        <MenuItem value="lc">LC</MenuItem>
-        <MenuItem value="mc">MC</MenuItem>
-      </TextField>
-      <TextField
-        label="Rank"
-        type="number"
-        value={rank}
-        onChange={(e) => setRank(e.target.value)}
-        helperText="Higher number = more senior (§2)."
-        inputProps={{ min: 1 }}
+    <AdminDialogFrame
+      {...props}
+      title={`Edit details: ${position.label}`}
+      submitLabel="Save"
+      canSubmit={level !== '' && parsedRank !== null}
+      submit={submit}
+    >
+      <PositionDetailsFields
+        level={level}
+        setLevel={setLevel}
+        rank={rank}
+        setRank={setRank}
+        canAddSameRank={canAddSameRank}
+        setCanAddSameRank={setCanAddSameRank}
+        maxRank={maxRank}
       />
-      <FormControlLabel
-        control={<Checkbox checked={canAddSameRank} onChange={(e) => setCanAddSameRank(e.target.checked)} />}
-        label="Can add another holder of the same position (president exception, §3.4)"
-      />
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
@@ -191,7 +171,7 @@ export function SetPositionActiveDialog({
   position,
   makeActive,
   ...props
-}: DialogProps & { position: AdminPositionRow; makeActive: boolean }) {
+}: AdminDialogProps & { position: AdminPositionRow; makeActive: boolean }) {
   const api = useApi()
 
   const submit = async () => {
@@ -200,19 +180,19 @@ export function SetPositionActiveDialog({
   }
 
   return (
-    <DialogFrame
+    <AdminDialogFrame
       {...props}
       title={makeActive ? `Reactivate "${position.label}"` : `Deactivate "${position.label}"`}
-      submitLabel={makeActive ? 'Mark active' : 'Deactivate'}
+      submitLabel={makeActive ? 'Reactivate' : 'Deactivate'}
       canSubmit
       submit={submit}
     >
       <Typography>
         {makeActive
           ? 'This position will be offered again when adding members.'
-          : 'This position will no longer be offered when adding members. All existing memberships with this position are unaffected.'}
+          : 'This position will no longer be offered when adding members. Everyone who already holds it keeps it. You can reactivate it later.'}
       </Typography>
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
@@ -220,7 +200,7 @@ export function SetPositionActiveDialog({
 // Function dialogs
 // ---------------------------------------------------------------------------
 
-export function AddFunctionDialog(props: DialogProps) {
+export function AddFunctionDialog(props: AdminDialogProps) {
   const api = useApi()
   const [label, setLabel] = useState('')
 
@@ -230,16 +210,22 @@ export function AddFunctionDialog(props: DialogProps) {
   }
 
   return (
-    <DialogFrame {...props} title="Add function" submitLabel="Add function" canSubmit={label.trim() !== ''} submit={submit}>
+    <AdminDialogFrame
+      {...props}
+      title="Add function"
+      submitLabel="Add function"
+      canSubmit={label.trim() !== ''}
+      submit={submit}
+    >
       <TextField required autoFocus label="Name" value={label} onChange={(e) => setLabel(e.target.value)} />
       <Typography variant="body2" color="text.secondary">
-        A unique key is generated from the name. The function can be renamed later.
+        You can rename the function later.
       </Typography>
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
-export function RenameFunctionDialog({ func, ...props }: DialogProps & { func: AdminFunctionRow }) {
+export function RenameFunctionDialog({ func, ...props }: AdminDialogProps & { func: AdminFunctionRow }) {
   const api = useApi()
   const [label, setLabel] = useState(func.label)
 
@@ -249,7 +235,7 @@ export function RenameFunctionDialog({ func, ...props }: DialogProps & { func: A
   }
 
   return (
-    <DialogFrame
+    <AdminDialogFrame
       {...props}
       title={`Rename "${func.label}"`}
       submitLabel="Rename"
@@ -258,9 +244,9 @@ export function RenameFunctionDialog({ func, ...props }: DialogProps & { func: A
     >
       <TextField required autoFocus label="Name" value={label} onChange={(e) => setLabel(e.target.value)} />
       <Typography variant="body2" color="text.secondary">
-        The new name shows everywhere. The key code and all membership history are unaffected.
+        The new name shows everywhere. Everyone&rsquo;s membership history keeps this function.
       </Typography>
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }
 
@@ -268,7 +254,7 @@ export function SetFunctionActiveDialog({
   func,
   makeActive,
   ...props
-}: DialogProps & { func: AdminFunctionRow; makeActive: boolean }) {
+}: AdminDialogProps & { func: AdminFunctionRow; makeActive: boolean }) {
   const api = useApi()
 
   const submit = async () => {
@@ -277,18 +263,18 @@ export function SetFunctionActiveDialog({
   }
 
   return (
-    <DialogFrame
+    <AdminDialogFrame
       {...props}
       title={makeActive ? `Reactivate "${func.label}"` : `Deactivate "${func.label}"`}
-      submitLabel={makeActive ? 'Mark active' : 'Deactivate'}
+      submitLabel={makeActive ? 'Reactivate' : 'Deactivate'}
       canSubmit
       submit={submit}
     >
       <Typography>
         {makeActive
           ? 'This function will be offered again when adding members.'
-          : 'This function will no longer be offered when adding members. All existing memberships with this function are unaffected.'}
+          : 'This function will no longer be offered when adding members. Everyone who already has it keeps it. You can reactivate it later.'}
       </Typography>
-    </DialogFrame>
+    </AdminDialogFrame>
   )
 }

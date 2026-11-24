@@ -20,8 +20,9 @@ import MoreVert from '@mui/icons-material/MoreVert'
 import { useCallback, useEffect, useState } from 'react'
 
 import { useApi } from '../../api/ApiContext'
+import { useReferenceData } from '../../api/ReferenceDataContext'
 import type { AdminFunctionRow, AdminPositionRow } from '../../api/types'
-import { can } from '../../auth/permissions'
+import { actingPosition, can } from '../../auth/permissions'
 import { useAuth } from '../../auth/authContext'
 import {
   AddFunctionDialog,
@@ -117,12 +118,21 @@ function FunctionActionsMenu({
  * of that (all MC positions also hold it via the Settings → Functions path,
  * spec §2A.8), but the Admin console only surfaces this unified screen to anyone
  * who already has `position:manage`.
+ *
+ * Hierarchy rule (§3.4, DEV-0049): actions are only offered on positions ranked
+ * below the signed-in admin's own, and new ranks must be below it too. The
+ * server checks again.
  */
 export function AdminPositionsFunctionsPage() {
   const api = useApi()
-  const { me } = useAuth()
+  const { me, actor } = useAuth()
+  const { invalidate: refreshReferenceData } = useReferenceData()
   const canManagePositions = me !== null && can(me.permissions, 'position', 'manage')
   const canManageFunctions = me !== null && can(me.permissions, 'function', 'manage')
+  // The signed-in admin's own rank. They can only edit or set ranks below it.
+  const myRank = (actor && actingPosition(actor)?.rank) ?? 0
+  const maxRank = myRank - 1
+  const canEditRow = (position: AdminPositionRow) => position.rank === null || position.rank < myRank
 
   const [positions, setPositions] = useState<AdminPositionRow[]>([])
   const [functions_, setFunctions] = useState<AdminFunctionRow[]>([])
@@ -142,6 +152,17 @@ export function AdminPositionsFunctionsPage() {
     loadFunctions()
   }, [loadPositions, loadFunctions])
 
+  // Add member and other screens read positions and functions from the shared
+  // reference data, so refresh that too after every change (same as the LCs screen).
+  const handlePositionsChanged = () => {
+    loadPositions()
+    refreshReferenceData()
+  }
+  const handleFunctionsChanged = () => {
+    loadFunctions()
+    refreshReferenceData()
+  }
+
   const closePositionDialog = () => setPositionDialog(null)
   const closeFunctionDialog = () => setFunctionDialog(null)
 
@@ -158,8 +179,8 @@ export function AdminPositionsFunctionsPage() {
               Positions &amp; functions
             </Typography>
             <Typography color="text.secondary" sx={{ mt: 0.5, maxWidth: '65ch' }}>
-              Positions define a person's role and rank. Functions define their department. Both are runtime-editable
-              (§1.5) — deactivating a value stops it being offered to new memberships but does not affect history.
+              Positions set a person&rsquo;s role and seniority. Functions are the area they work in. Deactivating
+              one stops it being offered for new memberships; everyone who already has it keeps it.
             </Typography>
           </Box>
         </Stack>
@@ -171,7 +192,7 @@ export function AdminPositionsFunctionsPage() {
           <Typography variant="h2" component="h2" id="positions-heading">
             Positions
           </Typography>
-          {canManagePositions && (
+          {canManagePositions && maxRank >= 1 && (
             <Button
               variant="contained"
               startIcon={<AddOutlined />}
@@ -181,6 +202,11 @@ export function AdminPositionsFunctionsPage() {
             </Button>
           )}
         </Stack>
+
+        <Typography color="text.secondary" sx={{ maxWidth: '65ch' }}>
+          New positions have no permissions until they are added to the permission matrix. You can only change
+          positions ranked below your own.
+        </Typography>
 
         <Paper variant="outlined" component="section" aria-labelledby="positions-heading" sx={{ p: 3 }}>
           <Box sx={{ overflowX: 'auto' }}>
@@ -208,9 +234,7 @@ export function AdminPositionsFunctionsPage() {
                     <TableRow key={position.id}>
                       <TableCell>{position.label}</TableCell>
                       <TableCell>
-                        <Typography variant="body2" fontFamily="monospace" color="text.secondary">
-                          {position.key}
-                        </Typography>
+                        <Box component="code">{position.key}</Box>
                       </TableCell>
                       <TableCell>{position.level ? position.level.toUpperCase() : '—'}</TableCell>
                       <TableCell>{position.rank ?? '—'}</TableCell>
@@ -224,10 +248,12 @@ export function AdminPositionsFunctionsPage() {
                       </TableCell>
                       {canManagePositions && (
                         <TableCell align="right">
-                          <PositionActionsMenu
-                            position={position}
-                            onChoose={(action) => setPositionDialog({ action, position })}
-                          />
+                          {canEditRow(position) && (
+                            <PositionActionsMenu
+                              position={position}
+                              onChoose={(action) => setPositionDialog({ action, position })}
+                            />
+                          )}
                         </TableCell>
                       )}
                     </TableRow>
@@ -284,9 +310,7 @@ export function AdminPositionsFunctionsPage() {
                     <TableRow key={func.id}>
                       <TableCell>{func.label}</TableCell>
                       <TableCell>
-                        <Typography variant="body2" fontFamily="monospace" color="text.secondary">
-                          {func.key}
-                        </Typography>
+                        <Box component="code">{func.key}</Box>
                       </TableCell>
                       <TableCell>
                         <Chip
@@ -314,20 +338,21 @@ export function AdminPositionsFunctionsPage() {
 
       {/* Position dialogs */}
       {positionDialog?.action === 'add' && (
-        <AddPositionDialog onClose={closePositionDialog} onDone={loadPositions} />
+        <AddPositionDialog maxRank={maxRank} onClose={closePositionDialog} onDone={handlePositionsChanged} />
       )}
       {positionDialog?.position && positionDialog.action === 'rename' && (
         <RenamePositionDialog
           position={positionDialog.position}
           onClose={closePositionDialog}
-          onDone={loadPositions}
+          onDone={handlePositionsChanged}
         />
       )}
       {positionDialog?.position && positionDialog.action === 'edit_details' && (
         <EditPositionDetailsDialog
           position={positionDialog.position}
+          maxRank={maxRank}
           onClose={closePositionDialog}
-          onDone={loadPositions}
+          onDone={handlePositionsChanged}
         />
       )}
       {positionDialog?.position && positionDialog.action === 'set_inactive' && (
@@ -335,7 +360,7 @@ export function AdminPositionsFunctionsPage() {
           position={positionDialog.position}
           makeActive={false}
           onClose={closePositionDialog}
-          onDone={loadPositions}
+          onDone={handlePositionsChanged}
         />
       )}
       {positionDialog?.position && positionDialog.action === 'set_active' && (
@@ -343,19 +368,19 @@ export function AdminPositionsFunctionsPage() {
           position={positionDialog.position}
           makeActive
           onClose={closePositionDialog}
-          onDone={loadPositions}
+          onDone={handlePositionsChanged}
         />
       )}
 
       {/* Function dialogs */}
       {functionDialog?.action === 'add' && (
-        <AddFunctionDialog onClose={closeFunctionDialog} onDone={loadFunctions} />
+        <AddFunctionDialog onClose={closeFunctionDialog} onDone={handleFunctionsChanged} />
       )}
       {functionDialog?.func && functionDialog.action === 'rename' && (
         <RenameFunctionDialog
           func={functionDialog.func}
           onClose={closeFunctionDialog}
-          onDone={loadFunctions}
+          onDone={handleFunctionsChanged}
         />
       )}
       {functionDialog?.func && functionDialog.action === 'set_inactive' && (
@@ -363,7 +388,7 @@ export function AdminPositionsFunctionsPage() {
           func={functionDialog.func}
           makeActive={false}
           onClose={closeFunctionDialog}
-          onDone={loadFunctions}
+          onDone={handleFunctionsChanged}
         />
       )}
       {functionDialog?.func && functionDialog.action === 'set_active' && (
@@ -371,7 +396,7 @@ export function AdminPositionsFunctionsPage() {
           func={functionDialog.func}
           makeActive
           onClose={closeFunctionDialog}
-          onDone={loadFunctions}
+          onDone={handleFunctionsChanged}
         />
       )}
     </Stack>

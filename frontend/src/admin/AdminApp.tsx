@@ -51,7 +51,7 @@ export function AdminApp() {
           </Route>
           <Route path="*" element={<PageMessage title="Page not found">This page doesn&rsquo;t exist.</PageMessage>} />
         </Route>
-      </Route> 
+      </Route>
     </Routes>
   )
 }

@@ -29,6 +29,7 @@ import {
   can,
   canExtendTerm,
   canMoveToTeam,
+  actingPosition,
   fixedTeam,
   homeChartScope,
   isActive,
@@ -54,6 +55,7 @@ import type {
   CreatePositionInput,
   CustomField,
   CustomFieldValue,
+  FunctionDef,
   HomeChart,
   IsoDate,
   Lc,
@@ -119,6 +121,88 @@ function copyAttribute(attribute: DbAttribute): DbAttribute {
   }
 }
 
+// ---- Positions & functions (§1.5, §2A.2, DEV-0049) ---------------------------
+
+/** A position as the mock stores it: the app's `Position`, plus id and active flag. */
+type StoredPosition = Position & { id: number; active: boolean }
+/** A function as the mock stores it: the app's `FunctionDef`, plus an id. */
+type StoredFunction = FunctionDef & { id: number }
+
+/** Back to the plain `Position` the rest of the app expects. */
+function asPosition(p: StoredPosition): Position {
+  return {
+    key: p.key,
+    label: p.label,
+    level: p.level,
+    rank: p.rank,
+    canAddSameRank: p.canAddSameRank,
+    presidential: p.presidential,
+    homeChartScope: p.homeChartScope,
+    holdsTeam: p.holdsTeam,
+  }
+}
+
+function asFunctionDef(f: StoredFunction): FunctionDef {
+  return { key: f.key, label: f.label, active: f.active, presidentOnly: f.presidentOnly }
+}
+
+/** Positions whose holders can open the Admin console. Deactivating one is a way to
+ * lock every admin out (docs/admin-lockout-recovery.md), so the screen refuses. */
+const adminAccessPositionKeys = new Set(
+  PERMISSION_MATRIX.filter((r) => r.resource === 'admin_console').map((r) => r.positionKey),
+)
+
+const OUTRANKED_MESSAGE = 'You can only change positions ranked below your own.'
+
+/**
+ * Position keys the permission rules give meaning to, same as the backend's
+ * `RESERVED_POSITION_KEYS`. A new position never gets one, even if no position holds
+ * it yet, or it would inherit those permissions ("Admin" becoming a real admin).
+ * `admin` is listed by hand: the backend grants it, but no mock persona holds it.
+ */
+const RESERVED_POSITION_KEYS: ReadonlySet<string> = new Set([
+  ...PERMISSION_MATRIX.map((r) => r.positionKey),
+  ...POSITIONS.map((p) => p.key),
+  'admin',
+])
+
+/**
+ * The hierarchy rule for editing positions (§3.4), same as the backend's
+ * `can_edit_position`: the position must rank below the actor's highest position,
+ * and so must any new rank given to it. `null` means "no rank involved".
+ */
+function canEditPosition(actor: Actor, currentRank: number | null, newRank: number | null): boolean {
+  const topRank = actingPosition(actor)?.rank
+  if (topRank === undefined) return false
+  if (currentRank !== null && currentRank >= topRank) return false
+  if (newRank !== null && newRank >= topRank) return false
+  return true
+}
+
+function isValidRank(rank: unknown): rank is number {
+  return typeof rank === 'number' && Number.isInteger(rank) && rank >= 1
+}
+
+/** Names are unique ignoring case. `exceptId` skips the row being renamed. */
+function labelTaken(rows: readonly { id: number; label: string }[], label: string, exceptId: number | null): boolean {
+  return rows.some((r) => r.id !== exceptId && r.label.toLowerCase() === label.toLowerCase())
+}
+
+/** Same as the backend: lowercase, non-alphanumerics to `_`, then `_2`, `_3`, ... if taken.
+ * Keys in `reserved` count as taken even when no row holds them. */
+function uniqueKey(rows: readonly { key: string }[], label: string, reserved: ReadonlySet<string> = new Set()): string {
+  const base =
+    label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 50) || 'item'
+  const taken = new Set([...rows.map((r) => r.key), ...reserved])
+  let key = base
+  for (let suffix = 2; taken.has(key); suffix++) key = `${base}_${suffix}`
+  return key
+}
+
 function toCatalogAttribute(attribute: DbAttribute): CatalogAttribute {
   const { recorded, ...rest } = copyAttribute(attribute)
   return { ...rest, inUse: recorded.length > 0 }
@@ -132,23 +216,12 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
   const db: MockDb = buildSeed(today())
   // Copies, because management screens edit these and seed constants are shared.
+  // Every other method reads LCs, positions and functions from these copies, so a
+  // change made in the Admin console shows up everywhere (e.g. Add member).
   const lcs: Lc[] = LCS.map((lc) => ({ ...lc }))
-  // Admin-screen rows carry numeric IDs (1-based index) and the full editable fields.
-  const adminPositions: AdminPositionRow[] = POSITIONS.map((p, i) => ({
-    id: i + 1,
-    key: p.key,
-    label: p.label,
-    level: p.level,
-    rank: p.rank,
-    canAddSameRank: p.canAddSameRank,
-    active: true,
-  }))
-  const adminFunctions: AdminFunctionRow[] = FUNCTIONS.map((f, i) => ({
-    id: i + 1,
-    key: f.key,
-    label: f.label,
-    active: f.active,
-  }))
+  // Positions and functions also get a numeric id (like the backend) and an `active` flag.
+  const positions: StoredPosition[] = POSITIONS.map((p, i) => ({ ...p, id: i + 1, active: true }))
+  const functions: StoredFunction[] = FUNCTIONS.map((f, i) => ({ ...f, id: i + 1 }))
   const attributes: DbAttribute[] = ATTRIBUTES.map(copyAttribute)
   let sessionPersonId: string | null = readSession()
   let nextId = 1000
@@ -173,11 +246,16 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   }
 
   // ---- lookups ------------------------------------------------------------
+  // Includes inactive positions: existing memberships keep showing theirs (§1.5).
   const position = (key: string): Position => {
-    const found = POSITIONS.find((p) => p.key === key)
+    const found = positions.find((p) => p.key === key)
     if (!found) throw new Error(`Unknown position ${key}`)
-    return found
+    return asPosition(found)
   }
+  /** What Add member may offer: active positions only. */
+  const activePositions = (): Position[] => positions.filter((p) => p.active).map(asPosition)
+  /** Every function, with its `active` flag: callers already skip inactive ones. */
+  const functionDefs = (): FunctionDef[] => functions.map(asFunctionDef)
   const lcOf = (id: string): Lc => {
     const found = lcs.find((l) => l.id === id)
     if (!found) throw new Error(`Unknown LC ${id}`)
@@ -185,7 +263,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
   }
   const functionRef = (key: string | null) => {
     if (key === null) return null
-    const f = FUNCTIONS.find((x) => x.key === key)
+    const f = functions.find((x) => x.key === key)
     return f ? { key: f.key, label: f.label } : null
   }
   const teamRef = (id: string | null) => {
@@ -321,7 +399,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     async getReferenceData(): Promise<ReferenceData> {
       await wait()
       const teams = TEAMS.map((t) => ({ ...t, leader: resolveTeamLeader(t.id) }))
-      return { lcs: lcs.filter((l) => l.active), positions: POSITIONS, functions: FUNCTIONS, terms: buildTerms(today()), teams }
+      return { lcs: lcs.filter((l) => l.active), positions: activePositions(), functions: functionDefs(), terms: buildTerms(today()), teams }
     },
 
     async listMembers(query: MemberQuery): Promise<Page<MemberSummaryRow>> {
@@ -408,14 +486,15 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
       // Hierarchy rule, LC-level rule and scope, re-checked on the "server" (§3.4, §3.6).
       const lc = lcs.find((l) => l.id === input.lcId)
-      const pos = POSITIONS.find((p) => p.key === input.positionKey)
+      const offeredPositions = activePositions()
+      const pos = offeredPositions.find((p) => p.key === input.positionKey)
       if (!lc || !pos || !addableLcs(actor, me.permissions, lcs.filter((l) => l.active)).some((l) => l.id === lc.id)) {
         return reject("You can't add people to that LC.")
       }
-      if (!addablePositions(actor, me.permissions, POSITIONS, lc).some((p) => p.key === pos.key)) {
+      if (!addablePositions(actor, me.permissions, offeredPositions, lc).some((p) => p.key === pos.key)) {
         return reject("You can't add that position.")
       }
-      const fn = addableFunctions(actor, me.permissions, FUNCTIONS, pos).find((f) => f.key === input.functionKey)
+      const fn = addableFunctions(actor, me.permissions, functionDefs(), pos).find((f) => f.key === input.functionKey)
       if (!fn) return reject("You can't add that function.")
 
       // Team pinning (§3.4): a Team-Leader-scope adder is fixed to their own team;
@@ -689,31 +768,48 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     },
 
     // ---- Admin console: Positions & functions (§1.5, §2A.2) -----------------
+    // Same rules as the backend (DEV-0049): `manage` on `position` / `function`; the
+    // hierarchy rule for positions; names unique ignoring case; positions that give
+    // admin access can't be deactivated; level and rank required and never cleared.
 
     async listPositionsAdmin(): Promise<AdminPositionRow[]> {
       await wait()
       const { me } = requireActor()
       if (!can(me.permissions, 'position', 'manage')) return []
-      return adminPositions.map((p) => ({ ...p }))
+      return [...positions]
+        .sort((a, b) => b.rank - a.rank || a.label.localeCompare(b.label))
+        .map((p) => ({
+          id: p.id,
+          key: p.key,
+          label: p.label,
+          level: p.level,
+          rank: p.rank,
+          canAddSameRank: p.canAddSameRank,
+          active: p.active,
+        }))
     },
 
     async createPosition(input: CreatePositionInput): Promise<ActionResult> {
       await wait()
-      const { me } = requireActor()
+      const { me, actor } = requireActor()
       if (!can(me.permissions, 'position', 'manage')) return reject("You don't have permission to manage positions.")
       const label = input.label.trim()
       if (!label) return reject('Enter a name for the position.')
-      if (adminPositions.some((p) => p.label.toLowerCase() === label.toLowerCase())) {
-        return reject('A position with that name already exists.')
-      }
-      const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'position'
-      adminPositions.push({
+      if (!isValidRank(input.rank)) return reject('Enter a rank of 1 or more.')
+      if (!canEditPosition(actor, null, input.rank)) return reject(OUTRANKED_MESSAGE)
+      if (labelTaken(positions, label, null)) return reject('A position with that name already exists.')
+      positions.push({
         id: nextId++,
-        key,
+        key: uniqueKey(positions, label, RESERVED_POSITION_KEYS),
         label,
-        level: input.level ?? null,
-        rank: input.rank ?? null,
+        level: input.level,
+        rank: input.rank,
         canAddSameRank: input.canAddSameRank ?? false,
+        // Frontend-only fields (see `Position`): a new position starts with the
+        // narrowest defaults until those become columns.
+        presidential: false,
+        homeChartScope: 'team',
+        holdsTeam: false,
         active: true,
       })
       return { status: 'ok' }
@@ -721,18 +817,26 @@ export function createMockApi(options: MockApiOptions = {}): Api {
 
     async updatePosition(positionId: number, changes: UpdatePositionInput): Promise<ActionResult> {
       await wait()
-      const { me } = requireActor()
+      const { me, actor } = requireActor()
       if (!can(me.permissions, 'position', 'manage')) return reject("You don't have permission to manage positions.")
-      const pos = adminPositions.find((p) => p.id === positionId)
+      const pos = positions.find((p) => p.id === positionId)
       if (!pos) return reject('That position no longer exists.')
-      if (changes.label !== undefined) {
-        const label = changes.label.trim()
+      if (!canEditPosition(actor, pos.rank, changes.rank ?? null)) return reject(OUTRANKED_MESSAGE)
+
+      // Validate everything first, so a rejected change leaves the position untouched.
+      const label = changes.label?.trim()
+      if (label !== undefined) {
         if (!label) return reject('Enter a name for the position.')
-        if (adminPositions.some((p) => p.id !== positionId && p.label.toLowerCase() === label.toLowerCase())) {
-          return reject('A position with that name already exists.')
-        }
-        pos.label = label
+        if (labelTaken(positions, label, positionId)) return reject('A position with that name already exists.')
       }
+      if (changes.rank !== undefined && !isValidRank(changes.rank)) return reject('Enter a rank of 1 or more.')
+      if (changes.active === false && pos.active && adminAccessPositionKeys.has(pos.key)) {
+        return reject(
+          "This position gives admin access, so it can't be deactivated here. Ask the tech team if it really needs to be retired.",
+        )
+      }
+
+      if (label !== undefined) pos.label = label
       if (changes.level !== undefined) pos.level = changes.level
       if (changes.rank !== undefined) pos.rank = changes.rank
       if (changes.canAddSameRank !== undefined) pos.canAddSameRank = changes.canAddSameRank
@@ -744,7 +848,9 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       await wait()
       const { me } = requireActor()
       if (!can(me.permissions, 'function', 'manage')) return []
-      return adminFunctions.map((f) => ({ ...f }))
+      return [...functions]
+        .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }))
+        .map((f) => ({ id: f.id, key: f.key, label: f.label, active: f.active }))
     },
 
     async createFunction(input: CreateFunctionInput): Promise<ActionResult> {
@@ -753,11 +859,8 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       if (!can(me.permissions, 'function', 'manage')) return reject("You don't have permission to manage functions.")
       const label = input.label.trim()
       if (!label) return reject('Enter a name for the function.')
-      if (adminFunctions.some((f) => f.label.toLowerCase() === label.toLowerCase())) {
-        return reject('A function with that name already exists.')
-      }
-      const key = label.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'function'
-      adminFunctions.push({ id: nextId++, key, label, active: true })
+      if (labelTaken(functions, label, null)) return reject('A function with that name already exists.')
+      functions.push({ id: nextId++, key: uniqueKey(functions, label), label, active: true, presidentOnly: false })
       return { status: 'ok' }
     },
 
@@ -765,14 +868,12 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       await wait()
       const { me } = requireActor()
       if (!can(me.permissions, 'function', 'manage')) return reject("You don't have permission to manage functions.")
-      const func = adminFunctions.find((f) => f.id === functionId)
+      const func = functions.find((f) => f.id === functionId)
       if (!func) return reject('That function no longer exists.')
-      if (changes.label !== undefined) {
-        const label = changes.label.trim()
+      const label = changes.label?.trim()
+      if (label !== undefined) {
         if (!label) return reject('Enter a name for the function.')
-        if (adminFunctions.some((f) => f.id !== functionId && f.label.toLowerCase() === label.toLowerCase())) {
-          return reject('A function with that name already exists.')
-        }
+        if (labelTaken(functions, label, functionId)) return reject('A function with that name already exists.')
         func.label = label
       }
       if (changes.active !== undefined) func.active = changes.active
@@ -801,7 +902,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       if (attributes.some((a) => a.key === input.key)) return reject('An attribute with that key already exists.')
       const problem = definitionProblem(input)
       if (problem) return reject(problem)
-      if (input.functionKey !== null && !FUNCTIONS.some((f) => f.key === input.functionKey)) {
+      if (input.functionKey !== null && !functions.some((f) => f.key === input.functionKey)) {
         return reject('Choose a valid function.')
       }
       attributes.push(
@@ -821,7 +922,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       const problem = definitionProblem(next)
       if (problem) return reject(problem)
       if (next.functionKey !== attribute.functionKey && next.functionKey !== null) {
-        if (!FUNCTIONS.some((f) => f.key === next.functionKey)) return reject('Choose a valid function.')
+        if (!functions.some((f) => f.key === next.functionKey)) return reject('Choose a valid function.')
       }
       if (next.dataType !== attribute.dataType && attribute.recorded.length > 0) {
         return reject(

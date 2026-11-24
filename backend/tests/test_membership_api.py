@@ -30,7 +30,7 @@ from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
-from tests.helpers import make_state_timezone
+from tests.helpers import api_client_options, make_state_timezone
 
 # ---------------------------------------------------------------------------
 # Test Fixtures
@@ -200,7 +200,7 @@ def client_with_actor(
     # Default actor is LCVP
     app.dependency_overrides[get_current_actor] = lambda: actor_map["lcvp"]
 
-    with TestClient(app) as test_client:
+    with TestClient(app, **api_client_options()) as test_client:
         yield test_client, actor_map, seed
 
     app.dependency_overrides.clear()
@@ -536,6 +536,32 @@ def test_add_member_rejects_inactive_lc(client_with_actor: Fixture, db_session: 
     resp = client.post("/api/v1/members", json=_add_payload(seed))
 
     assert resp.json() == {"status": "rejected", "message": "That LC is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_rejects_inactive_position(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.pos_member.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That position is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_rejects_inactive_function(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.fn_ogv.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That function is inactive."}
     assert _create_audit_count(db_session) == 0
 
 

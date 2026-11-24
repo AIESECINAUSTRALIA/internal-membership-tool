@@ -9,7 +9,7 @@ runtime without a developer touching code (spec §1.5).
 import enum
 from datetime import date
 
-from sqlalchemy import Boolean, Date, Enum, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Date, Enum, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -64,6 +64,8 @@ class Position(Base):
     """Lookup: "what role" a membership represents (LCP, Team Leader, Member, ...)."""
 
     __tablename__ = "position"
+    # Names are unique ignoring case, so "Member" and "member" can't both exist.
+    __table_args__ = (Index("uq_position_label_lower", text("lower(label)"), unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String, unique=True, index=True)
@@ -81,6 +83,8 @@ class Function(Base):
     """Lookup: "which function" a membership represents (BD, MKT, oGV, ...)."""
 
     __tablename__ = "function"
+    # Names are unique ignoring case, so "oGV" and "OGV" can't both exist.
+    __table_args__ = (Index("uq_function_label_lower", text("lower(label)"), unique=True),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String, unique=True, index=True)
