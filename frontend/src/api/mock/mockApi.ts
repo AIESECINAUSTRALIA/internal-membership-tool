@@ -215,19 +215,21 @@ export function createMockApi(options: MockApiOptions = {}): Api {
     return [...widest.values()]
   }
 
+  function buildCustomFields(personId: string): CustomField[] {
+    const p = personById(personId)
+    if (!p) throw new Error(`Unknown person ${personId}`)
+    return customFieldDefs.map((def) => ({ ...def, value: p.customFields[def.key] ?? null }))
+  }
+
   function buildMe(personId: string): Me {
     const p = personById(personId)
     if (!p) throw new Error(`Unknown person ${personId}`)
-    const customFields: CustomField[] = customFieldDefs.map((def) => ({
-      ...def,
-      value: p.customFields[def.key] ?? null,
-    }))
     return {
-      person: { id: p.id, firstName: p.firstName, lastName: p.lastName, email: p.email, customFields },
+      person: { id: p.id, firstName: p.firstName, lastName: p.lastName, email: p.email },
+      // Active only, like the backend's `/me` (§3.2). History is `getMyMembershipHistory`.
       memberships: db.memberships
-        .filter((m) => m.personId === personId)
-        .map(toView)
-        .sort((a, b) => (a.startDate < b.startDate ? 1 : -1)),
+        .filter((m) => m.personId === personId && isActive(m, today()))
+        .map(toView),
       permissions: resolvePermissions(personId),
     }
   }
@@ -268,6 +270,21 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       writeSession(null)
     },
 
+    async getMyCustomFields() {
+      await wait()
+      const { me } = requireActor()
+      return buildCustomFields(me.person.id)
+    },
+
+    async getMyMembershipHistory() {
+      await wait()
+      const { me } = requireActor()
+      return db.memberships
+        .filter((m) => m.personId === me.person.id)
+        .map(toView)
+        .sort((a, b) => (a.startDate < b.startDate ? 1 : -1))
+    },
+
     async updateMyCustomFields(values: Record<string, CustomFieldValue>) {
       await wait()
       const { me } = requireActor()
@@ -276,7 +293,7 @@ export function createMockApi(options: MockApiOptions = {}): Api {
       for (const def of customFieldDefs) {
         if (def.key in values) person.customFields[def.key] = values[def.key]
       }
-      return buildMe(person.id)
+      return buildCustomFields(person.id)
     },
 
     async getReferenceData(): Promise<ReferenceData> {

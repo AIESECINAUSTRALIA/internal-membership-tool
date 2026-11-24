@@ -60,6 +60,21 @@ the product title instead.
 2. In `api/index.ts`, replace `createMockApi(...)` with it.
 3. Delete `api/mock/`, and the `?as=` persona code in `api/index.ts`.
 
+**Where it stands.** In `supabase` mode (`docs/auth.md`), `api/http/httpApi.ts` sends
+these to the real backend: the membership-summary methods, the LCs/terms/teams in
+`getReferenceData`, and Profile's custom fields (`getMyCustomFields`,
+`updateMyCustomFields`, backend `/api/v1/me/custom-fields`) and position history
+(`getMyMembershipHistory`, backend `/api/v1/me/memberships`). `getMe` and sign-in go
+through `api/supabaseSession.ts`. Everything else still comes from the mock. As more
+endpoints land, add their methods to `httpApi.ts`.
+
+Profile's custom fields and position history are separate calls from `getMe` on
+purpose. `getMe` runs at every sign-in, so it stays one small backend call: a broken
+Profile endpoint shows an error on Profile instead of locking everyone out. And
+`Me.memberships` holds **only active memberships**, the ones that grant access
+(§3.2), so code that reads it never has to remember to skip ended ones. The full
+history (past, current and future) is only for display, on Profile.
+
 The mock enforces the same rules the spec gives the server (scope in the query, no email in
 the member list, the hierarchy rule, the LC-level rule, transfers end old memberships).
 `src/test/mockApi.test.ts` pins those rules, so the real backend can be checked against the

@@ -1239,9 +1239,12 @@ The developer docs (this spec, the schema) are not enough. The people who run th
 after each handover are **non-technical admins with zero prior context**, and they turn
 over yearly too. They need their own written guide.
 
-- **Location and format:** in the repo under `docs/admin-guide/` (proposed). Plain
-  language, numbered steps, screenshots of the Admin console. No code or SQL for
-  routine tasks. Never contains secrets or personal data.
+- **Location and format:** in the repo under `docs/admin-guide/`, starting from its
+  `README.md` (index, writing rules) and `_template.md`. Plain language, numbered steps,
+  screenshots of the Admin console taken in mock mode. No code or SQL for routine tasks;
+  the emergency guides (#8, #9) may include a clearly boxed copy-paste command, since
+  they cover situations the Admin console can't fix. Never contains secrets or personal
+  data.
 - **Guides required at minimum:**
 
   | # | Guide | Related |
@@ -1257,9 +1260,10 @@ over yearly too. They need their own written guide.
   | 9 | Recovering admin access if admins are locked out (once decided) | §12 #21 |
   | 10 | Who holds which accounts (≥2 owners each), without secrets | §10 |
 
-- **Upkeep (proposed):** any change to admin-facing behaviour updates the relevant
-  guide in the same PR. At each handover the outgoing and incoming admins walk through
-  the guide together and fix anything unclear.
+- **Upkeep:** any change to admin-facing behaviour updates the relevant guide in the
+  same PR (a checkbox in `.github/pull_request_template.md`), reviewed by someone who
+  didn't build the feature. At each handover the outgoing and incoming admins walk
+  through the guide together and fix anything unclear.
 
 ---
 

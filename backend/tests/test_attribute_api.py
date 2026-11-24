@@ -29,6 +29,7 @@ from app.models.privacy import AuditLog
 from app.repositories.attribute import set_attribute_value
 from app.repositories.kpi import record_kpi, set_home_chart_default
 from tests.helpers import (
+    api_client_options,
     make_attribute,
     make_function,
     make_kpi_attribute,
@@ -89,7 +90,7 @@ def attr_api(db_session: Session) -> Generator[AttributeApiFixture, None, None]:
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_actor] = lambda: actors["mc"]
 
-    with TestClient(app) as client:
+    with TestClient(app, **api_client_options()) as client:
         mc_membership = actors["mc"].acting_membership
         assert mc_membership is not None
         yield AttributeApiFixture(client, db_session, actors, mc_membership)
