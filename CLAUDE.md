@@ -115,6 +115,8 @@ sign-in must never be enabled on a deployed environment. The EXPA developer guid
 - **Branches**: `chore/DEV-XXXX_short_description` (`DEV-XXXX` = the Jira ticket).
 - **Commits / PR titles**: prefixed with the ticket ID, e.g. `chore: DEV-0015 ...`.
 - Changes land on `main` via PR; CI green is required.
+- **Admin-facing changes update the admin guide in the same PR** (`docs/admin-guide/`,
+  rules in its `README.md`, spec §10A). Plain language, screenshots from mock mode.
 
 ---
 
