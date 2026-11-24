@@ -5,9 +5,11 @@ in local environments (where ``make seed`` has already populated the DB).
 """
 
 from datetime import date, timedelta
+from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.membership import Membership, Team
 from app.models.org import LC, Function, LCType, Position, StateTimezone, Term
@@ -16,6 +18,15 @@ from app.models.person import Person
 TODAY = date(2026, 6, 15)
 YEAR_AGO = TODAY - timedelta(days=365)
 YEAR_AHEAD = TODAY + timedelta(days=365)
+TEST_BASE_URL = "https://testserver"
+
+
+def api_client_options() -> dict[str, Any]:
+    """Shared HTTP client settings for backend API tests."""
+    return {
+        "base_url": TEST_BASE_URL,
+        "headers": {"Origin": get_settings().app_base_url},
+    }
 
 
 def make_lc(
