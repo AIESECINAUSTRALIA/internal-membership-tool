@@ -16,7 +16,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `membership.py` | `membership`, `team`, `team_member` |
 | `privacy.py` | `audit_log` (later also `deletion_request`) |
 | `attribute.py` | `attribute`, `attribute_value` |
-| `kpi.py` | `kpi_record` |
+| `kpi.py` | `kpi_record`, `home_chart_default` |
 
 This grouping isn't enforced by anything — it's a convention matching the
 spec's own section breakdown (org-structural lookups vs. the person record
@@ -120,7 +120,9 @@ to a person only indirectly, through `membership`.
 
 - `aiesec_email` is unique and is the join key used when someone logs in via
   OAuth (spec §9): the verified email from the identity provider is matched
-  against this column to resolve who's signed in.
+  against this column to resolve who's signed in. With EXPA sign-in (planned, see
+  "Known differences" below), it's the **first-sign-in** match. After that the person is
+  matched by `expa_id`.
 - `status` (`ACTIVE` / `ALUMNUS` / `INACTIVE` / `ANONYMISED`) is a fixed
   lifecycle state, not an admin-editable lookup like `position`/`function` —
   it's structural to how the app behaves (e.g. an `ANONYMISED` person can no
@@ -305,6 +307,83 @@ needing a migration every time a new field or metric appears — acceptable beca
 or `kpi_record`, and because the single write path keeps the missing guarantees to a
 short, testable list rather than scattering `INSERT`s across the codebase.
 
+### Editing the catalog
+
+Admins add, edit and retire KPIs and custom fields in the Admin console's
+**Metrics & custom fields** screen (spec §1.5), backed by `GET/POST/PATCH
+/api/v1/attributes` (`app/api/v1/attributes.py`). Every call needs `manage` on
+`attribute`, which `app/core/permissions.py` grants to the MC and admin positions
+at `all` scope (so at least two people always hold it). Every create, edit,
+deactivate and reactivate writes an `attribute.*` audit entry with a before/after
+diff of the changed fields; an edit that changes nothing writes nothing.
+
+Because stored values depend on the catalog row, an edit can't change everything.
+The rules live in `app/repositories/attribute.py` (`create_attribute`,
+`update_attribute`, `deactivate_attribute`):
+
+| Field | Rule | Why |
+|---|---|---|
+| `key` | Set once, lowercase `a-z 0-9 _`, unique. | Code and reports refer to it. |
+| `applies_to` | Set once. | It decides which table holds the values. |
+| `data_type` | Locked once any `attribute_value` or `kpi_record` references the row. A KPI must be `number`. | Values sit in the typed column `data_type` picks; `kpi_record` only has `value_number`. |
+| `enum_options` | Options can be added; one still held by a stored value can't be removed. | A stored choice would point at nothing. |
+| `validation` | Checked on save: only the rules that fit the data type (`required` always, `min`/`max` on number and date, `regex` on text), `min <= max`, a regex that compiles. | A bad rule should fail when an admin saves it, not later when someone records a value. Changed rules apply to new writes only. |
+| `label`, `unit`, `function_id` | Freely editable. | Display and scoping only. |
+
+**Retiring (`active = false`)** is the only "delete" — there is no delete endpoint.
+A retired attribute keeps every value already recorded against it, and those values
+still count in rollups (`sum_by_function` doesn't look at `active`). It just takes no
+new values: `validate_and_coerce` (shared by `set_attribute_value` and `record_kpi`)
+rejects writes to it. Reactivating undoes this. To change a locked `data_type`, retire
+the attribute and add a new one with a new `key`.
+
+A retired KPI takes no new `kpi_record` rows, **imports included**. To backfill history
+for one, reactivate it, import, then retire it again. Each step is audit-logged.
+
+A retired attribute's stored value can still be **cleared** (set to null), so deletion
+requests (spec §8) work on retired fields. `required` stops applying once retired.
+
+A KPI that is a function's **homepage default** (`home_chart_default`) can't be retired
+or moved to another function until that default is changed. Moving it to the same
+function or making it shared (`function_id` null) is fine, because the default still
+works (docs/home-chart.md).
+
+### Editing your own custom fields (Profile, spec §2A.9)
+
+Everyone can edit their own **person-level** custom fields on the Profile page,
+through `GET` and `PATCH /api/v1/me/custom-fields` (`backend/app/api/v1/me.py`, logic
+in `backend/app/repositories/person.py`). They are separate from `GET /api/v1/me`
+(the sign-in check, `auth.py`) so a problem with the attribute catalog can never stop
+anyone signing in. Profile's position history has its own route for the same reason,
+`GET /api/v1/me/memberships` (`membership_history` in `person.py`): every membership
+the person has held, past, current and future, newest first. `/me` itself lists only
+**active** memberships, because only those grant access (§3.2); the history is for
+display and grants nothing. The decisions, and why:
+
+- **Only your own record.** The endpoint takes no person id. The person is always
+  the signed-in actor, so there is no input that could point it at someone else.
+  The rank check (§3.4) doesn't apply, because you are always acting on yourself.
+  The endpoint still checks `member_record:edit` in the permission matrix, so the
+  rule stays data, not code.
+- **Locked fields are rejected, not ignored.** The body is `{attribute_key: value}`.
+  Only keys of active `attribute` rows with `applies_to = 'person'` (and, for a
+  function-scoped attribute, only if you're currently in that function) are
+  accepted. Anything else, such as `full_name`, `aiesec_email`, membership fields,
+  dates or another person's id, gets a 422 and **nothing** is saved. Name, email,
+  membership and dates are changed by an admin (§2A.2).
+- **All or nothing.** Every field is validated before any is written, and the
+  values and the audit entry share one transaction.
+- **Unchanged values aren't rewritten**, so `recorded_at` keeps meaning "last
+  changed", and saving without changes writes no audit entry.
+- **The audit entry lists which keys changed, never their values.** Custom
+  fields (dietary needs, shirt size) are personal data, and `audit_log` can never
+  be edited or deleted (§8.4), so a value written there could never be removed,
+  even by a deletion request. The entry is `action = 'person.edit'`,
+  `diff = {"changed_keys": [...]}`.
+- **`recorded_by`** is the person's acting membership (their highest-ranked
+  active one, as chosen in `app/api/deps.py`). A person with no active membership
+  can't edit (403). They see the not-allocated page anyway.
+
 ## `kpi_record`
 
 KPIs are catalogued in `attribute` like any other volatile field (`applies_to =
@@ -346,6 +425,33 @@ date-range rollup of one KPI scoped to a member, and `membership(lc_id, function
 start_date, end_date)` for resolving a scope's active memberships — both added in the
 `kpi_record` migration, since `kpi_record` is what starts actually querying
 `membership` that way.
+
+## `home_chart_default`
+
+Added in migration `f006558c355d`. Which KPI the homepage chart plots for a function
+when the viewer doesn't pick one (spec §2A.4). The product decision behind it is in
+`docs/home-chart.md`.
+
+| Column | Purpose |
+|---|---|
+| `function_id` | PK, → `function`. The PK *is* the function, so the database itself allows at most one default per function |
+| `attribute_id` | → `attribute`: the default KPI |
+
+A function with no row has no default: the chart shows "No data exists" until the
+viewer picks a KPI.
+
+**Why a separate table, not `function.default_kpi_id`.** `attribute.function_id`
+already points at `function`. A column pointing back would make the two tables
+reference each other, which needs `use_alter` in SQLAlchemy and a three-step seed
+order. A lookup table keeps every FK one-way, and can grow (e.g. a different default
+per position level) without touching `function`.
+
+**What the FK can't check.** The attribute must be an active KPI that is this
+function's own or shared (`function_id` NULL).
+`app/repositories/kpi.py::set_home_chart_default` checks that and is the only write
+path. If a KPI is deactivated or moved to another function *after* being set as a
+default, the row is left alone, and `resolve_home_chart_kpi` treats it as "no default"
+rather than an error.
 
 ## Foreign keys and what deleting protects against
 
@@ -405,6 +511,9 @@ the same PR.
 | `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
 | Seeded positions | `lcp`, `lcvp`, `team_leader`, `member` | Also `mcd`, `mcvp`, `mcp`, with level and rank from spec §2 |
 | Seeded functions | Ten, including `igv`, `igte`, `mkt` | The fifteen in spec §2. No incoming functions |
+| `person.expa_id` | Absent | Added (unique, nullable): EXPA's person id, stored on first EXPA sign-in. **Anonymisation sets it to `NULL`** (spec §8.2) |
+| `user_session` | Absent | Added: our own server-side sign-in sessions. Stores a SHA-256 of the cookie token (never the token), `person_id`, pending OAuth `state`, `created_at`, `expires_at` (12 h), `revoked_at` (spec §9) |
+| `audit_log` protection | Application code only | DB-level: the runtime role `mt_runtime` gets only `INSERT`/`SELECT` on `audit_log`. Migrations run as a separate migrator role (spec §8.4; GCP design §5.3) |
 
 Two things to watch when fixing the seeds:
 
@@ -415,10 +524,12 @@ Two things to watch when fixing the seeds:
 - `lc.type` is stored as `'LC'` / `'MC'` (uppercase). The spec's lowercase
   `lc` / `mc` is informal wording, so keep the implemented values.
 
-The `permission_matrix`, `attribute`, `attribute_value`, `kpi_record` and
-`deletion_request` tables are not built yet. Their model files under
-`backend/app/models/` are empty stubs (`deletion_request` goes in `privacy.py`,
-next to `audit_log`). Build them to the spec directly.
+The `permission_matrix` and `deletion_request` tables are not built yet
+(`attribute`, `attribute_value` and `kpi_record` are — see above). Until
+`permission_matrix` exists, grants live in code as
+`BASELINE_PERMISSION_MATRIX` in `app/core/permissions.py`. Its model file
+`backend/app/models/permission.py` is an empty stub, and `deletion_request`
+goes in `privacy.py`, next to `audit_log`. Build them to the spec directly.
 
 ## Repository layer
 
@@ -427,7 +538,11 @@ next to `audit_log`). Build them to the spec directly.
 `backend/app/repositories/attribute.py` is the write/read path for
 `attribute_value` (`set_attribute_value`, `get_attribute_value`,
 `validate_and_coerce`) — see "EAV" above for why writes must go through here
-rather than constructing rows directly. `backend/app/repositories/kpi.py`
+rather than constructing rows directly — and for the catalog itself
+(`list_attributes`, `create_attribute`, `update_attribute`,
+`deactivate_attribute`, `activate_attribute`; see "Editing the catalog").
+`backend/app/repositories/person.py` reads and edits the signed-in person's own
+custom fields and lists their position history (see "Editing your own custom fields" above). `backend/app/repositories/kpi.py`
 is the write path and rollup query for `kpi_record` (`record_kpi`,
 `sum_by_function`). As more tickets add read patterns (e.g. "all memberships
 for an LC", "who leads this team"), add functions to the relevant file

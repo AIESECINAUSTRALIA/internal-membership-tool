@@ -6,6 +6,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import { createMockApi } from '../api/mock/mockApi'
+import { isActive } from '../auth/permissions'
 import type { PersonaKey } from '../api/mock/seed'
 import type { AddMemberInput, MemberQuery } from '../api/types'
 
@@ -238,18 +239,32 @@ describe('profile', () => {
   const pronouns = { key: 'pronouns', label: 'Pronouns', dataType: 'text' as const }
 
   it('has no person-level custom fields until a catalog exists', async () => {
-    const me = (await (await apiAs('lcvp')).getMe())!
-    expect(me.person.customFields).toEqual([])
+    expect(await (await apiAs('lcvp')).getMyCustomFields()).toEqual([])
   })
 
   it('only edits catalogued person-level fields; name and email stay locked (§2A.9)', async () => {
     const api = createMockApi({ persona: 'lcvp', latencyMs: 0, today: () => TODAY, customFieldDefs: [pronouns] })
     await api.signIn()
     const before = (await api.getMe())!
-    const after = await api.updateMyCustomFields({ pronouns: 'they/them', firstName: 'Hacked', email: 'x@y.z' })
-    expect(after.person.customFields.find((f) => f.key === 'pronouns')?.value).toBe('they/them')
+    const saved = await api.updateMyCustomFields({ pronouns: 'they/them', firstName: 'Hacked', email: 'x@y.z' })
+    expect(saved).toEqual([{ ...pronouns, value: 'they/them' }])
+    expect(await api.getMyCustomFields()).toEqual(saved)
+    const after = (await api.getMe())!
     expect(after.person.firstName).toBe(before.person.firstName)
     expect(after.person.email).toBe(before.person.email)
+  })
+})
+
+describe('position history (§2A.9)', () => {
+  it('lists every membership newest first, while getMe keeps only the active ones', async () => {
+    const api = await apiAs('lcvp')
+    const me = (await api.getMe())!
+    const history = await api.getMyMembershipHistory()
+    expect(me.memberships.every((m) => isActive(m, TODAY))).toBe(true)
+    // The lcvp persona was a TL last term: that shows in history only.
+    expect(history.length).toBeGreaterThan(me.memberships.length)
+    expect(history.map((m) => m.id)).toEqual(expect.arrayContaining(me.memberships.map((m) => m.id)))
+    expect([...history].sort((a, b) => (a.startDate < b.startDate ? 1 : -1))).toEqual(history)
   })
 })
 

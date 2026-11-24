@@ -112,3 +112,7 @@ Thumbs.db
 *.swo
 *~
 .claude/settings.local.json
+
+# AIESEC International's EXPA developer guides: kept out of git (Tech Lead, 2026-11-09).
+# Get them from aies.ec/developer-guides or the MC shared drive.
+12. Dev guides/
