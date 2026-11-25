@@ -1175,9 +1175,12 @@ mean, and the deletion-request SLA — before launch.
 - Each successful sign-in is written to the audit log (§8.4).
 - **Not this term (Phase 2):** using EXPA positions to grant access (access stays in our
   own permission matrix, §3), and calling the GIS API on a user's behalf.
-- **Status:** the code still uses the interim Google sign-in via Supabase Auth (DEV-36)
-  until the EXPA sign-in tickets land. Design: §5.4 of
-  `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
+- **Status:** EXPA sign-in is implemented in the backend (DEV-82) and frontend
+  (DEV-83), replacing the interim Google sign-in via Supabase Auth (DEV-36).
+  The backend runs the OAuth exchange and issues its own server-side session;
+  the frontend uses the session cookie with same-origin API requests. Manual
+  sign-in on the dev environment against EXPA staging is still to be verified.
+  Design: §5.4 of `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
 
 `TODO:` Confirm the exact set of official email domains, and whether any legitimate
 users (e.g. new members mid-onboarding) won't yet have an `@aiesec.net` address, or

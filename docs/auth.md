@@ -1,24 +1,4 @@
-# Authentication (sign in with an aiesec.net Google account)
-
-> **Being replaced: sign-in is moving to EXPA.** Decided 2026-11-09. This page still
-> describes the code as it is today: Google sign-in through Supabase Auth (DEV-36). After
-> the EXPA sign-in tickets land:
->
-> - People sign in with their **EXPA account** (`auth.aiesec.org`; EXPA staging on the dev
->   environment).
-> - The **backend** runs the OAuth exchange, reads `currentPerson { id aiesec_email }`
->   from the GIS API, and discards EXPA's tokens.
-> - It matches on a new `person.expa_id`, falling back to `aiesec_email` on first sign-in.
-> - The browser gets our own 12-hour server-side session in an HttpOnly `__session`
->   cookie.
-> - `@supabase/supabase-js` is removed with no replacement.
->
-> These stay as they are: the `ALLOWED_EMAIL_DOMAINS` check, the not-allocated rules,
-> `/me`, permission resolution, the sign-in audit entry and "no backend sign-in stub".
->
-> Full design: §5.4 of `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`. This
-> page gets rewritten for EXPA in the same PR as the backend change. Don't do new Supabase
-> setup.
+# Authentication (sign in with an EXPA account)
 
 How people sign in to the Membership Tool, how the backend knows who they are, and the
 one-time setup needed to make it work. Written for someone with no prior context.
@@ -90,9 +70,15 @@ Where the code lives:
 | Permissions returned by `/me` | `backend/app/core/resolved_permissions.py` |
 | Sign-in audit entry | `backend/app/core/audit.py` |
 | OAuth and session configuration | `backend/app/config.py` |
-
-The frontend authentication files are deliberately not listed here. They
-still implement Supabase sign-in and will be updated under DEV-83.
+| Frontend authentication mode | `frontend/src/api/authMode.ts` |
+| EXPA sign-in, sign-out and `/me` mapping | `frontend/src/api/expaSession.ts` |
+| Cookie-based HTTP requests | `frontend/src/api/http/httpApi.ts` |
+| Session-expiry notifications | `frontend/src/api/sessionEvents.ts` |
+| Signed-in person and session state | `frontend/src/auth/AuthProvider.tsx` |
+| Sign-in page and callback error messages | `frontend/src/pages/SignInPage.tsx` |
+| Choosing the mock or real API | `frontend/src/api/index.ts` |
+| Frontend route guards | `frontend/src/auth/guards.tsx` |
+| Local API proxy | `frontend/vite.config.ts` |
 
 ## Design decisions (and why)
 
@@ -243,8 +229,21 @@ person's active memberships and enforces the existing permission model.
 
 **Session expiry and logout.** Expired or revoked sessions get 401.
 `POST /api/v1/auth/logout` revokes the current session and clears both
-authentication cookies. The frontend's redirect and session-expiry UI
-behaviour will be updated in DEV-83.
+authentication cookies. The frontend clears the signed-in person after a
+successful logout, and the route guards send them back to sign-in.
+
+When a real HTTP API request gets a 401, `api/sessionEvents.ts` notifies
+`AuthProvider`, which checks `/me` again. If the session is no longer valid,
+the provider clears the signed-in person and the guards send them back to
+sign-in. Overlapping notifications are grouped so that several failed
+requests don't all start their own `/me` check. A 403 does not trigger this:
+the person is still signed in, but doesn't have permission to perform
+that action.
+
+There is no background polling or client-side session timer. An expired or
+revoked session is picked up on the next backend request or when the app
+loads again. The backend enforces expiry and revocation on every protected
+request, regardless of what the frontend is currently showing.
 
 ## EXPA backend setup
 
@@ -300,97 +299,151 @@ credentials. Run `uv run pytest -q` from `backend/`. A passing suite
 does not prove that EXPA's live OAuth endpoints, GIS URL, registered
 redirect or deployed proxy routing have been configured correctly.
 
-> **Frontend transition (DEV-83).** The sections below describe the
-> current Supabase-based frontend and are retained until DEV-83 changes
-> that code. They are not instructions for authenticating against the
-> DEV-82 backend: the backend now accepts only its own EXPA-derived
-> `__session` cookie. Real frontend sign-in will not work end-to-end
-> until DEV-83 is completed.
->
 ## Mock mode vs real sign-in
 
 `VITE_AUTH_MODE` (frontend) picks how sign-in works:
 
 | Value | What you get | Needs |
 |---|---|---|
-| `mock` | The development "Sign in" button and the `?as=` personas (`docs/frontend.md`). No Google, no backend. **Default for the dev server and tests.** | nothing |
-| `supabase` | "Sign in with Google", checked by `GET /api/v1/me`. **Default for production builds** (`npm run build`). | The Supabase + Google setup below, and the backend running |
+| `mock` | The development "Sign in" button and the `?as=` personas (`docs/frontend.md`). No EXPA, no backend. **Default for the dev server and tests.** | nothing |
+| `expa` | "Sign in with EXPA", checked by `GET /api/v1/me` using the backend's session cookie. **Always used in production builds** (`npm run build`). | A configured EXPA application and the backend running |
 
-When `VITE_AUTH_MODE` is unset, `frontend/src/api/authMode.ts` picks by build type, so a
-deployed build is real sign-in unless someone explicitly sets `VITE_AUTH_MODE=mock`
-(spec §2A.3: the placeholder must be off in any deployed environment). A production build
-without `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` stops at startup with an error,
-rather than falling back to the mock.
+When `VITE_AUTH_MODE` is unset, `frontend/src/api/authMode.ts` picks by build type.
+Production builds always use `expa`, even if `VITE_AUTH_MODE=mock` is set
+explicitly (spec §2A.3: the placeholder must be off in any deployed environment).
+There is no fallback to mock sign-in if the backend or EXPA is unavailable.
 
-In `supabase` mode **who you are and what you may do** are real. The other pages' data
-(member lists, reference data, the homepage chart) still comes from the mock until the
-frontend is wired to the backend endpoints. Where that mock data can't load for a real
-user, the page shows an error message rather than spinning. The mock lives only in the browser and the backend trusts only
-Supabase-signed tokens, so mock mode can never grant real access (spec §2A.3).
+In `expa` mode **who you are and what you may do** are real. The membership-summary
+methods, the LCs/terms/teams in the reference data, Profile's custom fields and
+position history, and the Admin console's People and Memberships methods come
+from the real backend. Features whose endpoints are not wired up yet still
+come from the mock (see `docs/frontend.md`, "Real sign-in"). Where that mock data
+can't load for a real user, the page shows an error message rather than spinning.
 
-## One-time setup (Supabase + Google; legacy frontend, DEV-83)
+The mock lives only in the browser and cannot issue a valid backend session.
+The backend accepts only its own server-side session cookie, so mock mode can
+never grant real access (spec §2A.3).
 
-Do this **once per Supabase project** (local/dev, and later production). Use the
-**AIESEC Australia-owned** Google and Supabase accounts, never a personal one
-(`CLAUDE.md`: no single point of failure, everything owned by the entity).
+## Frontend sign-in and session handling
 
-1. **Google Cloud: create the OAuth client**
-   1. In Google Cloud Console (an AIESEC-owned project): *APIs & Services → OAuth consent
-      screen*. Pick **Internal** if the aiesec.net Workspace admin allows it (then only
-      aiesec.net accounts can even reach the consent screen), otherwise **External**. App
-      name "AIESEC Australia Membership Tool". Scopes: `openid`, `email`, `profile` only.
-   2. *Credentials → Create credentials → OAuth client ID → Web application*.
-   3. **Authorised redirect URI**: `https://<your-project>.supabase.co/auth/v1/callback`
-      (Supabase shows the exact value on its Google provider page).
-   4. Copy the **Client ID** and **Client secret**.
-2. **Supabase: turn on Google**
-   1. *Authentication → Sign In / Providers → Google*: enable it, paste the Client ID and
-      secret.
-   2. Turn **off** the providers we don't use (email/password, magic link, phone), so
-      Google is the only way in.
-   3. *Authentication → URL Configuration*: set **Site URL** to the frontend address and add
-      every frontend address to **Redirect URLs**, with `/**`:
-      `http://localhost:5173/**` for local, plus the Vercel preview and production URLs.
-3. **Store the secrets.** Put the Google client secret in the shared **Bitwarden**
-   collection (`docs/local-development.md` → "Where the real values live"). It lives only
-   in Google and Supabase. The app never reads it.
-4. **Configure the app** (`.env`, from `.env.example`):
+The frontend uses `api/expaSession.ts` to wrap the underlying `Api`
+implementation. It replaces only the authentication methods, leaving the
+membership, reference data, Profile and Admin methods to the underlying API.
 
-   ```bash
-   SUPABASE_URL=https://<your-project>.supabase.co      # backend
-   ALLOWED_EMAIL_DOMAINS=aiesec.net                     # backend
-   VITE_SUPABASE_URL=https://<your-project>.supabase.co # frontend
-   VITE_SUPABASE_ANON_KEY=<publishable / anon key>      # frontend, browser-safe
-   VITE_API_URL=http://localhost:8000                   # frontend
-   VITE_AUTH_MODE=supabase                              # frontend
-   VITE_GOOGLE_HOSTED_DOMAIN=aiesec.net                 # frontend, optional hint
-   ```
+- **Sign in:** `signIn()` navigates the browser to `/api/v1/auth/login`.
+  This is a browser navigation, not a `fetch` call: the backend redirects
+  the browser to EXPA, and EXPA redirects it back to the backend's callback.
+  The frontend does not exchange the authorization code or handle EXPA tokens.
+- **Who is signed in:** `getMe()` calls `GET /api/v1/me` with
+  `credentials: 'same-origin'`. The browser sends the session cookie
+  automatically. A 401 means there is no valid session and returns `null`.
+  Other failures are reported to the sign-in page rather than being treated
+  as a successful sign-in.
+- **Sign out:** `signOut()` sends `POST /api/v1/auth/logout` with the
+  session cookie. The backend revokes the session and clears the cookies.
+  The provider clears its signed-in person after the request succeeds.
 
-   Then `make up`. `VITE_*` values are read when the frontend starts or builds, so restart
-   it after changing them.
-5. **Make sure you exist in `person`.** Sign-in only works for an email in
-   `person.aiesec_email` with an active `membership`. Until the Admin console exists, add
-   yourself with SQL or a seed.
+`AuthProvider` loads `/me` when the app starts. This is also how it picks up a
+successful EXPA sign-in: the callback sends the browser back to the app, the
+app loads again, and `/me` identifies the new session. There is no frontend
+OAuth callback handler, token refresh process or authentication SDK.
+
+The provider holds the `Me` payload for the whole app. Navigation, route
+guards and page actions are derived from that payload, so the frontend uses
+the same permissions that the backend resolved. This does not replace the
+backend's permission checks on individual requests.
+
+Positions in the `/me` response are looked up by key against the frontend's
+reference data. An unknown position gets the most restrictive defaults.
+The sign-in wrapper takes those positions from the local reference data
+rather than making another backend request, so a broken reference-data
+endpoint does not prevent someone signing in.
+
+## Same-origin API requests
+
+All frontend API requests use relative `/api` URLs. The browser sends them
+to the same origin that served the frontend, and the hosting layer forwards
+them to the backend:
+
+| Environment | Browser origin | Where `/api/**` goes |
+|---|---|---|
+| Local (native) | `http://localhost:5173` | Vite proxy → `http://localhost:8000` |
+| Local (Docker Compose) | `http://localhost:5173` | Vite proxy → `http://backend:8000` |
+| Dev | `https://members-dev.aiesecaustralia.org` | Firebase Hosting → dev Cloud Run service |
+| Prod | `https://members.aiesecaustralia.org` | Firebase Hosting → prod Cloud Run service |
+
+The Vite development proxy is configured in `frontend/vite.config.ts`.
+`API_PROXY_TARGET` can override its target when needed; Docker Compose sets
+it automatically. It is a development-server setting, not a browser setting.
+
+On a deployment, `FRONTEND_ORIGIN` and `APP_BASE_URL` are the same public
+origin. Firebase serves both the frontend and `/api`, and the backend's
+cookies are marked Secure because the public URL uses HTTPS.
+
+There is no `VITE_API_URL` to configure per environment. The same production
+frontend build can be served on dev and prod, with the hosting layer
+forwarding requests to the appropriate backend.
+
+See `docs/local-development.md` for running the local stack, and
+`docs/superpowers/specs/2026-11-09-gcp-deployment-design.md` for the deployment
+design.
 
 ## Checking it works
 
+The frontend tests use a fake backend and a fake browser navigation, so
+they do not need EXPA credentials or a running API. The backend tests
+exercise the OAuth exchange and session handling with a stubbed EXPA
+provider.
+
 | Try | Expect |
 |---|---|
-| Sign in with an `@aiesec.net` account that has an active membership | Home |
-| `@aiesec.net` account with no `person` row, or a term that ended | the not-allocated page |
-| A personal Gmail | back on sign-in with "Only AIESEC accounts can sign in…" |
-| Profile menu → Sign out | back on sign-in |
-| `curl localhost:8000/api/v1/me` (no token) | 401 |
+| Open the app without a valid session | the sign-in page |
+| Select "Sign in with EXPA" | the browser visits `/api/v1/auth/login` and is redirected to EXPA |
+| Sign in with an allowed EXPA account that has an active membership | Home |
+| EXPA account with no matching person row, or no active membership | sign-in page with the fixed not-allocated message |
+| EXPA account outside the allowed email domains | sign-in page with the AIESEC account message |
+| Cancel sign-in on EXPA | sign-in page with the cancellation message |
+| Return with missing or expired OAuth state | sign-in page with the expired-attempt message |
+| Use the app after the session expires or is revoked | next protected request gets 401, and the app returns to sign-in |
+| Attempt an action without permission | 403; the person remains signed in |
+| Profile menu → Sign out | session revoked, back on sign-in |
+| Production build with `VITE_AUTH_MODE=mock` | real EXPA sign-in, not the development placeholder |
 
-If `/me` answers **503**, `SUPABASE_URL` is empty on the backend, or the backend can't
-reach Supabase to download its public keys.
+If `/auth/login` answers **503**, the backend's `EXPA_CLIENT_ID` or
+`EXPA_CLIENT_SECRET` is not configured. Check the backend environment,
+not the frontend: the browser does not need either credential.
+
+If the browser returns to sign-in with `error=expired`, check that the
+registered callback URL, public API origin and cookie handling agree.
+If it returns with `error=expa`, check the backend's EXPA OAuth and GIS
+configuration.
+
+Frontend checks (from `frontend/`):
+
+- `npm run lint`
+- `npx tsc --noEmit`
+- `npm run test`
+- `npm run build`
+
+The authentication tests are in `src/test/expaSession.test.tsx` and
+`src/test/authMode.test.ts`. Cookie-based HTTP requests and 401 notifications
+are covered in `src/test/httpApi.test.ts`.
+
+A passing test suite does not prove that live EXPA sign-in works. Before
+DEV-83 is accepted, someone other than the implementer must confirm a
+manual sign-in on `members-dev.aiesecaustralia.org` against EXPA staging.
+This also checks the registered callback, Firebase's forwarding of API
+requests and cookies, and the deployed backend's configuration.
 
 ## Not built yet
 
 - **The permission matrix as a database table** (spec §3.3): `/me` reads the in-code
   `BASELINE_PERMISSION_MATRIX` through `resolve_permissions` until then.
-- **Frontend pages on real data**: the member list, Tracking and the homepage chart still
-  read the mock API, even under real sign-in. Wiring them to the membership summary API
-  (DEV-0042, `/api/v1/members`) is a separate ticket.
-- **Admin console sign-in** (spec §2A.2): will reuse this same provider.
+- **Frontend pages on real data**: features whose backend endpoints are not
+  wired into `httpApi.ts` still read the mock API, even under real sign-in.
+  See `docs/frontend.md` for which methods use the real backend.
+- **Admin console sign-in** (spec §2A.2): the Admin console uses the same
+  authentication provider and permission payload as the main app. Its
+  dedicated sign-in page and return destination still need to be aligned
+  with the EXPA flow.
 - **Queueing unmatched sign-ins for an admin** (spec §9, optional).

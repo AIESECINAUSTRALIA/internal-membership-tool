@@ -44,7 +44,7 @@ export function HomePage() {
       (result) => {
         if (!cancelled) setChart(result)
       },
-      // No chart data for this person (e.g. real Google sign-in while chart data is still
+      // No chart data for this person (e.g. real EXPA sign-in while chart data is still
       // mock-only): show the empty state instead of loading forever.
       () => {
         if (!cancelled) setFailed(true)

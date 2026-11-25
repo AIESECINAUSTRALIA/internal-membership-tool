@@ -12,7 +12,8 @@
  *     refused without calling the backend.
  *   - getReferenceData: LCs/terms/teams from the backend, positions/functions from
  *     the fallback.
- *   - The auth headers from `getAuthHeaders()` go on every request.
+ *   - Every request includes credentials for cookie-based authentication.
+ *   - A 401 notifies the authentication provider; a 403 does not.
  *   - All four `AddMemberResult` statuses are returned correctly.
  *   - Read methods throw on an HTTP error; write methods (addMember, extendTerm,
  *     moveToTeam) never throw — failures come back as a plain-English rejection.
@@ -32,11 +33,9 @@ import type { MemberQuery } from '../api/types'
 // ---------------------------------------------------------------------------
 
 const BASE = 'http://localhost:8000'
-const AUTH = { Authorization: 'Bearer test-token' }
 
 function makeApi() {
   return createHttpApi({
-    getAuthHeaders: async () => AUTH,
     baseUrl: BASE,
     // Zero-latency mock for the methods that aren't real yet (getMe, signIn, …).
     fallback: createMockApi({ latencyMs: 0 }),
@@ -100,27 +99,60 @@ describe('listMembers', () => {
     })
   })
 
-  it('sends the auth headers on every request', async () => {
-    fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
-    await makeApi().listMembers(ALL)
-    expect(headersOf(fetchSpy)).toMatchObject(AUTH)
-    expect(headersOf(fetchSpy)['X-Actor-Email']).toBeUndefined()
+
+  it('includes credentials on every request without bearer or actor headers', async () => {
+    fetchSpy.mockImplementation(() => okResponse({ rows: [], total: 0 }))
+    const api = makeApi()
+
+    await api.listMembers(ALL)
+    await api.listMembers(ALL)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+    for (let i = 0; i < 2; i++) {
+      const init = fetchSpy.mock.calls[i][1] as RequestInit
+
+      expect(init.credentials).toBe('same-origin')
+      expect(headersOf(fetchSpy, i).Authorization).toBeUndefined()
+      expect(headersOf(fetchSpy, i)['X-Actor-Email']).toBeUndefined()
+    }
   })
 
-  it('asks for fresh auth headers on each call', async () => {
-    // A token can be refreshed between calls, so it must never be cached.
-    fetchSpy.mockImplementation(() => okResponse({ rows: [], total: 0 }))
-    const getAuthHeaders = vi.fn(async () => ({}))
-    const api = createHttpApi({ getAuthHeaders, baseUrl: BASE, fallback: createMockApi({ latencyMs: 0 }) })
-    await api.listMembers(ALL)
-    await api.listMembers(ALL)
-    expect(getAuthHeaders).toHaveBeenCalledTimes(2)
+  it('notifies the authentication provider when the session is rejected', async () => {
+    const onUnauthorized = vi.fn()
+    const api = createHttpApi({
+      baseUrl: BASE,
+      fallback: createMockApi({ latencyMs: 0 }),
+      onUnauthorized,
+    })
+
+    fetchSpy.mockReturnValueOnce(errorResponse(401, 'Unauthorized'))
+
+    await expect(api.listMembers(ALL)).rejects.toThrow(/401/)
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
+  it('does not notify the authentication provider on a permission refusal', async () => {
+    const onUnauthorized = vi.fn()
+    const api = createHttpApi({
+      baseUrl: BASE,
+      fallback: createMockApi({ latencyMs: 0 }),
+      onUnauthorized,
+    })
+
+    fetchSpy.mockReturnValueOnce(errorResponse(403, 'Forbidden'))
+
+    await expect(api.listMembers(ALL)).rejects.toThrow(/403/)
+    expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
   it('uses a relative URL when baseUrl is empty', async () => {
     // '' = same origin: Firebase Hosting forwards /api/** to the backend.
     fetchSpy.mockReturnValueOnce(okResponse({ rows: [], total: 0 }))
-    const api = createHttpApi({ getAuthHeaders: async () => ({}), baseUrl: '', fallback: createMockApi({ latencyMs: 0 }) })
+    const api = createHttpApi({
+      baseUrl: '',
+      fallback: createMockApi({ latencyMs: 0 }),
+    })
     await api.listMembers(ALL)
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/members/summary')
   })
@@ -408,7 +440,7 @@ describe('getReferenceData', () => {
     fetchSpy.mockReturnValueOnce(okResponse({ lcs: [LC_3], terms: [TERM_7], teams: [TEAM_12] }))
     const ref = await makeApi().getReferenceData()
     expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/reference/membership-options`)
-    expect(headersOf(fetchSpy)).toMatchObject(AUTH)
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).credentials).toBe('same-origin')
     expect(ref.lcs).toEqual([LC_3])
     expect(ref.terms).toEqual([TERM_7])
     expect(ref.teams).toEqual([TEAM_12])

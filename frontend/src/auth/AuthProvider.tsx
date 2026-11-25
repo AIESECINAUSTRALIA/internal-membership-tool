@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import { useApi } from '../api/ApiContext'
-import { SignInRejectedError } from '../api/supabaseSession'
 import type { Api, Me } from '../api/types'
 import { AuthContext, type AuthState } from './authContext'
 import { actorFromMe, hasActiveMembership } from './permissions'
@@ -36,24 +35,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     reload.current = load
     void load()
-    const unsubscribe = api.onSessionChange?.(() => void load())
+    let checkingSession = false
+
+    const unsubscribe = api.onSessionChange?.(() => {
+      if (checkingSession) return
+
+      checkingSession = true
+      void load().finally(() => {
+        checkingSession = false
+      })
+    })
     return () => {
       mounted = false
       unsubscribe?.()
     }
   }, [api])
 
+
   const signIn = useCallback(async () => {
     setError(null)
     await api.signIn()
-    await reload.current()
+
+    // EXPA sign-in leaves the page. The provider loads the session when
+    // the browser returns. Mock sign-in happens without leaving the page.
+    if (api.signInMethod !== 'expa') {
+      await reload.current()
+    }
   }, [api])
+
 
   const signOut = useCallback(async () => {
     await api.signOut()
     latestTicket.current++ // a load still in flight must not sign the person back in
     setMe(null)
+    setError(null)
+    setStatus('ready')
   }, [api])
+
 
   const value = useMemo<AuthState>(() => {
     const today = todayIso()
@@ -73,16 +91,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 /** `api.getMe()`, with failures turned into a message for the sign-in page. */
-async function fetchMe(api: Api): Promise<{ result: Me | null; failure: string | null }> {
+async function fetchMe(api: Api): Promise<{
+  result: Me | null
+  failure: string | null
+}> {
   try {
     return { result: await api.getMe(), failure: null }
-  } catch (e) {
+  } catch {
     return {
       result: null,
-      failure:
-        e instanceof SignInRejectedError
-          ? e.message
-          : 'We could not check your sign-in right now. Please try again in a moment.',
+      failure: 'We could not check your sign-in right now. Please try again in a moment.',
     }
   }
 }

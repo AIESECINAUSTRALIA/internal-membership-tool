@@ -27,11 +27,8 @@ services:
   frontend:
     build: ./frontend
     environment:                        # only browser-safe vars, not the whole .env
-      VITE_API_URL: ${VITE_API_URL}
-      VITE_SUPABASE_URL: ${VITE_SUPABASE_URL}
-      VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY}
+      API_PROXY_TARGET: http://backend:8000
       VITE_AUTH_MODE: ${VITE_AUTH_MODE:-mock}
-      VITE_GOOGLE_HOSTED_DOMAIN: ${VITE_GOOGLE_HOSTED_DOMAIN:-}
     ports: ["5173:5173"]
     volumes:
       - ./frontend:/app

@@ -10,7 +10,8 @@ frontend/src/
   theme/theme.ts        ALL styling. Colours, type, component looks. Read its header comment.
   api/types.ts          Every shape the UI knows about the server, and the one `Api` interface.
   api/index.ts          THE swap point: chooses the mock or the real backend.
-  api/supabaseSession.ts Real Google sign-in (Supabase) + GET /api/v1/me. See docs/auth.md.
+  api/expaSession.ts    Real EXPA sign-in + GET /api/v1/me + sign-out. See docs/auth.md.
+  api/sessionEvents.ts Notifies the auth provider when the backend rejects a session.
   api/mock/             In-memory fake server (seed data, rules). Delete when the backend is real.
   auth/permissions.ts   Pure functions: permission gating and the hierarchy rule (§3.4).
   auth/guards.tsx       Route guards, driven by the signed-in person's `me` payload.
@@ -60,13 +61,14 @@ the product title instead.
 2. In `api/index.ts`, replace `createMockApi(...)` with it.
 3. Delete `api/mock/`, and the `?as=` persona code in `api/index.ts`.
 
-**Where it stands.** In `supabase` mode (`docs/auth.md`), `api/http/httpApi.ts` sends
+**Where it stands.** In `expa` mode (`docs/auth.md`), `api/http/httpApi.ts` sends
 these to the real backend: the membership-summary methods, the LCs/terms/teams in
 `getReferenceData`, and Profile's custom fields (`getMyCustomFields`,
 `updateMyCustomFields`, backend `/api/v1/me/custom-fields`) and position history
-(`getMyMembershipHistory`, backend `/api/v1/me/memberships`). `getMe` and sign-in go
-through `api/supabaseSession.ts`. Everything else still comes from the mock. As more
-endpoints land, add their methods to `httpApi.ts`.
+(`getMyMembershipHistory`, backend `/api/v1/me/memberships`). The Admin console's
+People and Memberships methods also use the real backend (DEV-47). `getMe`,
+sign-in and sign-out go through `api/expaSession.ts`. Everything else still comes
+from the mock. As more endpoints land, add their methods to `httpApi.ts`.
 
 Profile's custom fields and position history are separate calls from `getMe` on
 purpose. `getMe` runs at every sign-in, so it stays one small backend call: a broken
@@ -88,21 +90,38 @@ person, the LC Vice President in oGV at USYD, whose first name is `temp_oGV` (la
 blank). There are no real or realistic names. Tests find people by id (for example
 `p-sam`), never by name. Change names in `buildSeed` in `api/mock/seed.ts`.
 
-## Real sign-in (Google) vs the development sign-in
+## Real sign-in (EXPA) vs the development sign-in
 
 `VITE_AUTH_MODE` chooses. `mock` is the development sign-in described below, and the
-default on the dev server and in tests. `supabase` shows a single "Sign in with Google"
-button and asks the backend's `GET /api/v1/me` who you are and what you may do; it's the
-default for production builds (`api/authMode.ts`). See `docs/auth.md`
-for the flow and the one-time Supabase/Google setup.
+default on the dev server and in tests. `expa` shows a single "Sign in with EXPA"
+button and asks the backend's `GET /api/v1/me` who you are and what you may do.
+Production builds always use `expa`, even if `VITE_AUTH_MODE=mock` is set
+(`api/authMode.ts`, spec §2A.3). See `docs/auth.md` for the flow and the one-time
+EXPA application setup.
 
-Where the data comes from in `supabase` mode (`api/index.ts`, ticket DEV-0043):
+The frontend never handles EXPA's access tokens. `signIn()` sends the browser to
+`/api/v1/auth/login`, and the backend runs the OAuth exchange. On a successful
+sign-in, the backend sets its own HttpOnly `__session` cookie and sends the browser
+back to the app. `getMe()` calls `GET /api/v1/me` with
+`credentials: 'same-origin'`, so the browser sends the cookie without the frontend
+having to read or store it. `signOut()` sends `POST /api/v1/auth/logout`, which
+revokes the session and clears the cookie.
+
+The API is always the relative `/api`: Vite's development proxy forwards requests
+to the backend locally, and Firebase Hosting forwards them to Cloud Run on the
+deployed environments. The frontend doesn't need the backend's hostname, so the
+same production build works on both dev and prod. See `docs/local-development.md`
+for the local proxy configuration.
+
+Where the data comes from in `expa` mode (`api/index.ts`, ticket DEV-0043):
 
 | `Api` method | Source |
 |---|---|
 | `listMembers`, `addMember`, `getMembershipDetail`, `extendTerm`, `moveToTeam` | real backend (`api/http/httpApi.ts`) |
 | `getReferenceData` | LCs, terms and teams (only teams whose term hasn't ended) from the backend, with real database ids; positions and functions from the mock |
-| `getMe`, `signIn`, `signOut` | Supabase + `GET /api/v1/me` (`api/supabaseSession.ts`) |
+| `getMe`, `signIn`, `signOut` | EXPA sign-in and the backend's session cookie (`api/expaSession.ts`) |
+| `getMyCustomFields`, `updateMyCustomFields`, `getMyMembershipHistory` | real backend (Profile, DEV-0045) |
+| Admin People and Memberships methods | real backend (DEV-47) |
 | everything else | mock, until its backend endpoints exist |
 
 In `mock` mode every method comes from the mock and the backend is never called.
@@ -119,15 +138,22 @@ plain-English message (session expired, no permission, not found, or "Something 
 wrong"). The read methods throw, and each page shows its own error state. A form holding a
 non-numeric id (left over from mock data) is refused before anything is sent.
 
-> **Changing: sign-in moves to EXPA** (decided 2026-11-09, see `docs/auth.md`).
-> `supabase` mode becomes `expa`:
-> - "Sign in with EXPA" goes to `/api/v1/auth/login`.
-> - `getMe` calls `/api/v1/me` with the session cookie (`credentials: 'same-origin'`).
-> - Sign out is `POST /api/v1/auth/logout`.
->
-> `@supabase/supabase-js`, `supabaseClient.ts`, `supabaseSession.ts`, `VITE_SUPABASE_*` and
-> `VITE_API_URL` go away. The API is always the relative `/api`, which Vite's dev proxy
-> forwards to the backend locally. `mock` mode and the `?as=` personas below don't change.
+**An expired or revoked session sends the person back to sign-in.** When the HTTP
+API receives a 401, it notifies `AuthProvider` through `api/sessionEvents.ts`.
+The provider checks `/me` again, and if the session is no longer valid, clears
+the signed-in person. The route guards then send them back to sign-in. Several
+overlapping 401 responses trigger only one check at a time. A 403 means the person
+doesn't have permission to do something, not that they have been signed out.
+
+There is no background session polling: an expired session is picked up on the
+next real backend request, or when the app is loaded again.
+
+**Failed sign-ins come back to the sign-in page.** The backend redirects the
+browser to `/sign-in?error=<reason>` when the OAuth callback fails. The sign-in
+page translates the reason into a message, including the fixed not-allocated
+wording from spec §2A.3. A person who has no active membership at sign-in never
+gets a session. The not-allocated page is still used when an existing signed-in
+person no longer has an active membership. See `docs/auth.md` for the error codes.
 
 ## Signing in as a different role (development only)
 
