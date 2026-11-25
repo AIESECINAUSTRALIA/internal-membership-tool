@@ -1,9 +1,24 @@
 import { Alert, Button, Typography } from '@mui/material'
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { useApi } from '../api/ApiContext'
 import { useAuth } from '../auth/authContext'
 import { AuthLayout } from '../layout/AuthLayout'
+
+/**
+ * Why a sign-in failed, keyed by the `?error=` value the backend's
+ * `/auth/callback` adds when it redirects here. Keep in sync with `SignInError` in
+ * `backend/app/api/v1/auth.py`.
+ */
+const SIGN_IN_ERRORS: Record<string, string> = {
+  denied: 'Sign-in was cancelled. Please try again.',
+  expired: 'Your sign-in attempt expired. Please try again.',
+  expa: 'We could not reach EXPA. Please try again in a moment.',
+  domain: 'Please sign in with your AIESEC account.',
+  // Fixed wording from spec §2A.3 (same as the not-allocated page).
+  not_allocated: 'You have not been allocated yet, please contact someone in your EB or MC',
+}
 
 /**
  * Sign in (spec §2A.3). With real sign-in (VITE_AUTH_MODE=supabase, docs/auth.md) this
@@ -16,6 +31,12 @@ export function SignInPage() {
   const google = signInMethod === 'google'
   const [busy, setBusy] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
+  const [searchParams] = useSearchParams()
+  const callbackCode = searchParams.get('error')
+  // An unknown code still gets a message rather than silence.
+  const callbackError = callbackCode
+    ? (SIGN_IN_ERRORS[callbackCode] ?? 'Sign-in failed. Please try again.')
+    : null
 
   const handleSignIn = async () => {
     setBusy(true)
@@ -31,7 +52,7 @@ export function SignInPage() {
     }
   }
 
-  const message = startError ?? error
+  const message = startError ?? error ?? callbackError
 
   return (
     <AuthLayout

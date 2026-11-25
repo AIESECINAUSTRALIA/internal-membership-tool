@@ -6,9 +6,12 @@ from app.core.permissions import (
     POSITION_RANKS,
     MembershipContext,
     can_add_member,
+    can_admin_manage_membership,
+    can_edit_position,
     can_extend_term,
     can_manage_attribute,
     can_manage_lc,
+    can_manage_person,
     can_move_to_team,
     can_view_membership,
     position_level,
@@ -329,3 +332,115 @@ def test_lc_level_positions_cannot_manage_attributes(position_key: str) -> None:
 
 def test_actor_without_memberships_cannot_manage_attributes() -> None:
     assert can_manage_attribute([]) is False
+
+
+# ---------------------------------------------------------------------------
+# Admin console: people and memberships (DEV-47)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("position_key", ["mcd", "mcvp", "mcp", "admin"])
+def test_mc_and_admin_positions_can_manage_people(position_key: str) -> None:
+    assert can_manage_person([_context_for(position_key)]) is True
+
+
+@pytest.mark.parametrize("position_key", ["member", "team_leader", "lcvp", "lcp"])
+def test_lc_level_positions_cannot_manage_people(position_key: str) -> None:
+    assert can_manage_person([_context_for(position_key)]) is False
+    allowed, _ = can_admin_manage_membership(
+        [_context_for(position_key)],
+        target_person_id=2,
+        target_position_key="member",
+        target_position_rank=0,
+        target_lc_id=1,
+        adding=True,
+    )
+    assert allowed is False
+
+
+def _admin_check(
+    actor: MembershipContext, *, key: str, rank: int, person_id: int = 2, adding: bool = True
+) -> tuple[bool, str | None]:
+    return can_admin_manage_membership(
+        [actor],
+        target_person_id=person_id,
+        target_position_key=key,
+        target_position_rank=rank,
+        target_lc_id=actor.lc_id,
+        adding=adding,
+    )
+
+
+def test_admin_membership_changes_follow_the_hierarchy_rule() -> None:
+    mcd = _context_for("mcd")
+    assert _admin_check(mcd, key="lcp", rank=4) == (True, None)
+    assert _admin_check(mcd, key="mcd", rank=5)[0] is False
+    assert _admin_check(mcd, key="mcvp", rank=6)[0] is False
+
+
+def test_nobody_changes_their_own_memberships_on_the_admin_console() -> None:
+    mcp = _context_for("mcp")
+    allowed, reason = _admin_check(mcp, key="member", rank=1, person_id=mcp.person_id)
+    assert allowed is False
+    assert reason == "You can't change your own memberships."
+
+
+def test_president_exception_applies_to_adding_only() -> None:
+    mcp = MembershipContext(
+        membership_id=1,
+        person_id=1,
+        lc_id=1,
+        position_key="mcp",
+        position_rank=7,
+        can_add_same_rank=True,
+    )
+    assert _admin_check(mcp, key="mcp", rank=7, adding=True) == (True, None)
+    assert _admin_check(mcp, key="mcp", rank=7, adding=False)[0] is False
+
+
+# ---------------------------------------------------------------------------
+# Editing positions (DEV-0049, spec §3.4): you may only change a position ranked
+# below your own, and only give it a rank below your own. So an MCD can't
+# out-rank the MCP, and nobody can raise a position to their own level.
+# ---------------------------------------------------------------------------
+
+
+def _context_with_rank(rank: int) -> MembershipContext:
+    return MembershipContext(
+        membership_id=1, person_id=1, lc_id=1, position_key="test", position_rank=rank
+    )
+
+
+@pytest.mark.parametrize(
+    ("actor_rank", "current_rank", "new_rank", "allowed"),
+    [
+        (5, 7, None, False),  # MCD renaming the MCP position
+        (5, 5, None, False),  # MCD editing their own position
+        (5, 4, 6, False),  # MCD lifting LCP above themselves
+        (5, 4, 5, False),  # MCD lifting LCP to their own rank
+        (5, 4, 3, True),  # MCD moving LCP down
+        (5, 4, None, True),  # MCD renaming LCP
+        (5, None, 4, True),  # creating a position below yourself
+        (5, None, 5, False),  # creating a position at your own rank
+        (5, None, None, True),  # a legacy position with no rank yet
+        (8, 7, 7, True),  # the admin position can edit the MCP
+    ],
+)
+def test_can_edit_position(
+    actor_rank: int, current_rank: int | None, new_rank: int | None, allowed: bool
+) -> None:
+    result = can_edit_position(
+        [_context_with_rank(actor_rank)], current_rank=current_rank, new_rank=new_rank
+    )
+
+    assert result is allowed
+
+
+def test_can_edit_position_uses_highest_membership() -> None:
+    contexts = [_context_with_rank(3), _context_with_rank(6)]
+
+    assert can_edit_position(contexts, current_rank=5, new_rank=None) is True
+
+
+def test_nobody_without_a_membership_can_edit_positions() -> None:
+    assert can_edit_position([], current_rank=None, new_rank=1) is False

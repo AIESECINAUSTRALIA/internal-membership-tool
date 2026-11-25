@@ -20,22 +20,34 @@ import PersonAddAlt1Outlined from '@mui/icons-material/PersonAddAlt1Outlined'
 import MoreVert from '@mui/icons-material/MoreVert'
 import SearchIcon from '@mui/icons-material/Search'
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { useApi } from '../../api/ApiContext'
 import type { AdminPersonQuery, AdminPersonRow, Page } from '../../api/types'
-import { NotBuiltYetDialog } from '../../components/NotBuiltYetDialog'
+import { useAuth } from '../../auth/authContext'
+import { can } from '../../auth/permissions'
 import { fullName } from '../../lib/labels'
 import { useDebounced } from '../../lib/useDebounced'
+import { AddPersonDialog, EditPersonDialog, SetPersonActiveDialog, UnlinkExpaDialog } from '../PeopleDialogs'
 
-type PersonAction = 'edit' | 'deactivate'
+type PersonAction = 'edit' | 'memberships' | 'deactivate' | 'reactivate' | 'unlink'
 
-/** The per-row "..." menu: Edit and Deactivate, both stubs until built. */
-function PersonActionsMenu({ person, onChoose }: { person: AdminPersonRow; onChoose: (action: PersonAction) => void }) {
+/** The per-row "..." menu. A deactivated person can only be edited or reactivated. */
+function PersonActionsMenu({
+  person,
+  canManageMemberships,
+  onChoose,
+}: {
+  person: AdminPersonRow
+  canManageMemberships: boolean
+  onChoose: (action: PersonAction) => void
+}) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const choose = (action: PersonAction) => {
     setAnchor(null)
     onChoose(action)
   }
+  const deactivated = person.status === 'inactive'
   return (
     <>
       <IconButton
@@ -47,11 +59,25 @@ function PersonActionsMenu({ person, onChoose }: { person: AdminPersonRow; onCho
       </IconButton>
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem onClick={() => choose('edit')}>Edit</MenuItem>
-        <MenuItem onClick={() => choose('deactivate')} disabled={!person.active}>
-          Deactivate
-        </MenuItem>
+        {canManageMemberships && <MenuItem onClick={() => choose('memberships')}>Manage memberships</MenuItem>}
+        {person.expaLinked && <MenuItem onClick={() => choose('unlink')}>Unlink EXPA</MenuItem>}
+        {deactivated ? (
+          <MenuItem onClick={() => choose('reactivate')}>Reactivate</MenuItem>
+        ) : (
+          <MenuItem onClick={() => choose('deactivate')}>Deactivate</MenuItem>
+        )}
       </Menu>
     </>
+  )
+}
+
+/** Deactivated beats everything; otherwise whether they hold a role today. */
+function StatusChip({ person }: { person: AdminPersonRow }) {
+  if (person.status === 'inactive') return <Chip size="small" variant="outlined" label="Deactivated" />
+  return person.active ? (
+    <Chip size="small" variant="outlined" color="success" label="Active" />
+  ) : (
+    <Chip size="small" variant="outlined" label="No current role" />
   )
 }
 
@@ -59,19 +85,27 @@ function PersonActionsMenu({ person, onChoose }: { person: AdminPersonRow; onCho
  * The People screen (spec §1.5, §2A.2): add, edit, deactivate people, identified by
  * their AIESEC email. Unlike the Membership summary (§2A.5), this list DOES show email
  * and includes people with no current membership — that's the point of an admin view.
- * Search and pagination run through the API, same pattern as the Membership page; add
- * and edit are stubs until the backend exists.
+ * Search and pagination run through the API, same pattern as the Membership page.
+ *
+ * There is no delete. Deactivating stops someone signing in and ends their current
+ * memberships, but keeps every row their history points at (§1.5). Each action is
+ * checked again on the server, including the hierarchy rule (§3.4).
  */
 export function AdminPeoplePage() {
   const api = useApi()
+  const navigate = useNavigate()
+  const { me } = useAuth()
+  const canManageMemberships = me !== null && can(me.permissions, 'membership', 'manage')
   const [search, setSearch] = useState('')
   const debouncedSearch = useDebounced(search)
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(10)
-  const [dialog, setDialog] = useState<{ title: string; body: string } | null>(null)
+  // Bumped after a change, so the table reloads with the same query.
+  const [version, setVersion] = useState(0)
+  const [dialog, setDialog] = useState<{ action: PersonAction | 'add'; person: AdminPersonRow | null } | null>(null)
 
   const query: AdminPersonQuery = useMemo(() => ({ search: debouncedSearch, page, pageSize }), [debouncedSearch, page, pageSize])
-  const queryKey = JSON.stringify(query)
+  const queryKey = `${JSON.stringify(query)}#${version}`
   const [result, setResult] = useState<{ key: string; page: Page<AdminPersonRow> } | null>(null)
   const loading = result?.key !== queryKey
 
@@ -86,6 +120,14 @@ export function AdminPeoplePage() {
   }, [api, query, queryKey])
 
   const rows = result?.page.rows ?? []
+  const closeDialog = () => setDialog(null)
+  const reload = () => setVersion((v) => v + 1)
+
+  const choose = (person: AdminPersonRow, action: PersonAction) => {
+    // Router state, not the URL: no name or email in the browser history.
+    if (action === 'memberships') navigate('/admin/memberships', { state: { person } })
+    else setDialog({ action, person })
+  }
 
   return (
     <Stack spacing={3}>
@@ -95,14 +137,10 @@ export function AdminPeoplePage() {
             People
           </Typography>
           <Typography color="text.secondary" sx={{ mt: 0.5, maxWidth: '65ch' }}>
-            Everyone in the system, identified by their AIESEC email.
+            Everyone in the system, identified by their AIESEC email. Deactivating someone keeps their history.
           </Typography>
         </Box>
-        <Button
-          variant="contained"
-          startIcon={<PersonAddAlt1Outlined />}
-          onClick={() => setDialog({ title: 'Add person', body: 'This will add a new person, identified by their AIESEC email.' })}
-        >
+        <Button variant="contained" startIcon={<PersonAddAlt1Outlined />} onClick={() => setDialog({ action: 'add', person: null })}>
           Add person
         </Button>
       </Stack>
@@ -126,13 +164,14 @@ export function AdminPeoplePage() {
               <TableCell>Last name</TableCell>
               <TableCell>Email</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>EXPA</TableCell>
               <TableCell aria-label="Actions" />
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5}>
+                <TableCell colSpan={6}>
                   <Typography sx={{ py: 1 }}>No data exists</Typography>
                 </TableCell>
               </TableRow>
@@ -143,26 +182,15 @@ export function AdminPeoplePage() {
                 <TableCell>{person.lastName}</TableCell>
                 <TableCell>{person.email}</TableCell>
                 <TableCell>
-                  <Chip
-                    size="small"
-                    label={person.active ? 'Active' : 'Inactive'}
-                    color={person.active ? 'success' : 'default'}
-                    variant="outlined"
-                  />
+                  <StatusChip person={person} />
                 </TableCell>
+                {/* Words, not just colour, so the state is clear to everyone (WCAG AA). */}
+                <TableCell>{person.expaLinked ? 'Linked' : 'Not linked'}</TableCell>
                 <TableCell align="right">
                   <PersonActionsMenu
                     person={person}
-                    onChoose={(action) =>
-                      setDialog(
-                        action === 'edit'
-                          ? { title: `Edit ${fullName(person.firstName, person.lastName)}`, body: 'This will change their name and custom fields.' }
-                          : {
-                              title: `Deactivate ${fullName(person.firstName, person.lastName)}`,
-                              body: 'This will end their current membership and stop them signing in, without deleting their history.',
-                            },
-                      )
-                    }
+                    canManageMemberships={canManageMemberships}
+                    onChoose={(action) => choose(person, action)}
                   />
                 </TableCell>
               </TableRow>
@@ -183,10 +211,20 @@ export function AdminPeoplePage() {
         rowsPerPageOptions={[10, 25, 50]}
       />
 
-      {dialog && (
-        <NotBuiltYetDialog open title={dialog.title} onClose={() => setDialog(null)}>
-          {dialog.body}
-        </NotBuiltYetDialog>
+      {dialog?.action === 'add' && <AddPersonDialog onClose={closeDialog} onDone={reload} />}
+      {dialog?.person && dialog.action === 'edit' && (
+        <EditPersonDialog person={dialog.person} onClose={closeDialog} onDone={reload} />
+      )}
+      {dialog?.person && dialog.action === 'unlink' && (
+        <UnlinkExpaDialog person={dialog.person} onClose={closeDialog} onDone={reload} />
+      )}
+      {dialog?.person && (dialog.action === 'deactivate' || dialog.action === 'reactivate') && (
+        <SetPersonActiveDialog
+          person={dialog.person}
+          makeActive={dialog.action === 'reactivate'}
+          onClose={closeDialog}
+          onDone={reload}
+        />
       )}
     </Stack>
   )

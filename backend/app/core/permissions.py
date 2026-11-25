@@ -43,7 +43,9 @@ FUNCTION_SCOPE_POSITIONS: set[str] = {"lcvp", "lcp"}
 def position_level(position_key: str) -> Literal["lc", "mc"]:
     """Which kind of entity a position belongs to (Spec §3.6).
 
-    Fallback until ticket 2 adds `position.level`, same pattern as `POSITION_RANKS`.
+    Only a fallback now: `position.level` exists (DEV-0049) and
+    `repositories.membership._position_level` reads it first, using this only
+    while the column is empty. Same pattern as `POSITION_RANKS`.
     """
     return "mc" if position_key in MC_POSITIONS else "lc"
 
@@ -148,6 +150,23 @@ for _mc_pos in ["mcd", "mcvp", "mcp"]:
 for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "lc", "manage", "all"))
     BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "attribute", "manage", "all"))
+
+# People and memberships on the Admin console (spec §1.5, §2A.2). Same holders as `lc`
+# above, so the capability comes from a position held by several people, never one
+# named person (spec §2). `membership:manage` is separate from `membership:create` /
+# `edit`: those are the Membership summary page's scoped grants (§2A.5), this is the
+# admin screen's org-wide one. The hierarchy rule still applies to it
+# (`can_admin_manage_membership`).
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "person", "manage", "all"))
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "membership", "manage", "all"))
+# Position management (spec §1.5, §2A.2): Admin console only.
+# MC positions can ALSO manage functions via Settings (spec §2A.8), and are
+# already granted `function:manage` above. `position:manage` is added here too
+# so the Admin console's unified Positions & functions screen is accessible to
+# MC positions (consistent with lc:manage and person:manage above).
+for _position_key in sorted(MC_POSITIONS | ADMIN_POSITIONS):
+    BASELINE_PERMISSION_MATRIX.append(MatrixGrant(_position_key, "position", "manage", "all"))
 
 
 @dataclass(frozen=True)
@@ -271,6 +290,44 @@ def can_act_on_target(
     return target.position_rank < acting.position_rank
 
 
+def can_manage_position(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, deactivate, or edit rank/level/can_add_same_rank on positions (§1.5, §2A.2)."""
+    return resolve_widest_scope(actor_memberships, "position", "manage") == "all"
+
+
+def can_edit_position(
+    actor_memberships: Sequence[MembershipContext],
+    *,
+    current_rank: int | None,
+    new_rank: int | None,
+) -> bool:
+    """The hierarchy rule for editing positions (spec §3.4, DEV-0049).
+
+    Holding `manage` on `position` is not enough on its own: you may only change a
+    position that ranks BELOW your own highest position, and only give it a rank
+    below yours. Without this, an MCD (rank 5) could set the MCP's rank to 1 and end
+    up out-ranking the president.
+
+    - `current_rank`: the position's rank today. `None` when creating a position, or
+      for an old position with no rank yet (anyone with `manage` may fix those).
+    - `new_rank`: the rank being set. `None` when the rank isn't changing.
+    """
+    if not actor_memberships:
+        return False
+    top_rank = max(context.position_rank for context in actor_memberships)
+
+    if current_rank is not None and current_rank >= top_rank:
+        return False
+    if new_rank is not None and new_rank >= top_rank:
+        return False
+    return True
+
+
+def can_manage_function(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, rename, or deactivate functions (spec §1.5, §2A.2, §2A.8)."""
+    return resolve_widest_scope(actor_memberships, "function", "manage") == "all"
+
+
 def can_manage_lc(actor_memberships: Sequence[MembershipContext]) -> bool:
     """Add, rename, set state, deactivate or merge LCs (spec §1.5).
 
@@ -287,6 +344,64 @@ def can_manage_attribute(actor_memberships: Sequence[MembershipContext]) -> bool
     no target person, so the hierarchy and self-action checks do not apply.
     """
     return resolve_widest_scope(actor_memberships, "attribute", "manage") == "all"
+
+
+def can_manage_person(actor_memberships: Sequence[MembershipContext]) -> bool:
+    """Add, edit, deactivate or reactivate people on the Admin console (spec §1.5).
+
+    Needs `manage` on `person` at scope `all`. This function checks only the matrix
+    grant. The §3.4 hierarchy rule is applied per target person by
+    `_check_outranks_person` in `repositories/admin_people.py` (edit, deactivate,
+    reactivate and unlink EXPA).
+    """
+    return resolve_widest_scope(actor_memberships, "person", "manage") == "all"
+
+
+def can_admin_manage_membership(
+    actor_memberships: Sequence[MembershipContext],
+    *,
+    target_person_id: int,
+    target_position_key: str,
+    target_position_rank: int,
+    target_lc_id: int,
+    adding: bool,
+) -> tuple[bool, str | None]:
+    """Assign, correct or end a membership on the Admin console (spec §2A.2).
+
+    Returns (is_allowed, rejection_reason). Both checks from §3.4 must pass:
+
+    1. The matrix grants `manage` on `membership` at scope `all`. An admin is not
+       limited to one LC or team the way the Membership summary page is (DEV-47).
+    2. The hierarchy rule still holds: nobody changes their own memberships, and the
+       position involved must rank below the actor's. The president exception (an
+       LCP or MCP adding another holder of their own position, in their own entity)
+       applies to adding only, as in `can_add_member`.
+
+    The level-match rule (§3.6) is about the LC, not the actor, so the repository
+    checks it separately for every write.
+    """
+    if resolve_widest_scope(actor_memberships, "membership", "manage") != "all":
+        return False, "You do not have permission to manage memberships."
+
+    acting = get_acting_membership(actor_memberships)
+    if acting is None:
+        return False, "No active membership found."
+
+    if target_person_id == acting.person_id:
+        return False, "You can't change your own memberships."
+
+    if target_position_rank < acting.position_rank:
+        return True, None
+
+    if (
+        adding
+        and acting.can_add_same_rank
+        and target_position_key == acting.position_key
+        and target_lc_id == acting.lc_id
+    ):
+        return True, None
+
+    return False, "You can't assign or change a position at or above your own."
 
 
 def can_view_membership(

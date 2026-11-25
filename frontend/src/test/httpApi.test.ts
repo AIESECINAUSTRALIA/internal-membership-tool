@@ -432,3 +432,140 @@ describe('delegated methods', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
+
+// ---------------------------------------------------------------------------
+// Admin console: People and Memberships (DEV-47)
+// ---------------------------------------------------------------------------
+
+describe('admin people', () => {
+  const PERSON_ROW = {
+    id: '5',
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    email: 'ada@aiesec.net',
+    active: false,
+    status: 'active',
+  }
+  const NEW_PERSON = { firstName: 'Ada', lastName: 'Lovelace', email: 'ada@aiesec.net' }
+
+  function jsonResponse(status: number, body: unknown) {
+    return Promise.resolve(new Response(JSON.stringify(body), { status }))
+  }
+
+  it('createPerson maps 201 to ok', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(201, PERSON_ROW))
+    const result = await makeApi().createPerson(NEW_PERSON)
+    expect(result).toEqual({ status: 'ok' })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people`)
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).method).toBe('POST')
+  })
+
+  it("createPerson shows the server's 409 detail", async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(409, { detail: 'Someone already has that email address.' }))
+    const result = await makeApi().createPerson(NEW_PERSON)
+    expect(result).toEqual({ status: 'rejected', message: 'Someone already has that email address.' })
+  })
+
+  it('deactivatePerson 404 says the person no longer exists', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(404, { detail: 'Person not found' }))
+    const result = await makeApi().deactivatePerson('5')
+    expect(result).toEqual({
+      status: 'rejected',
+      message: 'That person no longer exists. Refresh the page.',
+    })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people/5/deactivate`)
+  })
+
+  it('listPeopleAdmin sends the query as URL parameters and returns the page', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { rows: [PERSON_ROW], total: 1 }))
+    const page = await makeApi().listPeopleAdmin({ search: 'ada l', page: 2, pageSize: 10 })
+    expect(page).toEqual({ rows: [PERSON_ROW], total: 1 })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people?search=ada+l&page=2&pageSize=10`)
+  })
+
+  it('assignMembership maps ok', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { status: 'ok', membershipId: '9' }))
+    const result = await makeApi().assignMembership('5', {
+      lcId: '3',
+      positionKey: 'member',
+      functionKey: 'ogv',
+      startDate: '2026-08-01',
+      endDate: '2026-12-31',
+    })
+    expect(result).toEqual({ status: 'ok' })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people/5/memberships`)
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.lcId).toBe(3)
+  })
+
+  it('assignMembership passes a rejection message through', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { status: 'rejected', message: 'Nope.' }))
+    const result = await makeApi().assignMembership('5', {
+      lcId: '3',
+      positionKey: 'member',
+      functionKey: null,
+      startDate: '2026-08-01',
+      endDate: '2026-12-31',
+    })
+    expect(result).toEqual({ status: 'rejected', message: 'Nope.' })
+  })
+
+  it('correctMembership PATCHes and endMembership POSTs', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { status: 'ok' }))
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { status: 'ok' }))
+    const api = makeApi()
+    expect(await api.correctMembership('9', { functionKey: null })).toEqual({ status: 'ok' })
+    expect(await api.endMembership('9', '2026-10-01')).toEqual({ status: 'ok' })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/memberships/9`)
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).method).toBe('PATCH')
+    expect(JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string)).toEqual({ functionKey: null })
+    expect(fetchSpy.mock.calls[1][0]).toBe(`${BASE}/api/v1/memberships/9/end`)
+    expect(JSON.parse((fetchSpy.mock.calls[1][1] as RequestInit).body as string)).toEqual({ endDate: '2026-10-01' })
+  })
+
+  it('updatePerson PATCHes, reactivatePerson POSTs, listPersonMemberships throws on error', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, PERSON_ROW))
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, PERSON_ROW))
+    fetchSpy.mockReturnValueOnce(jsonResponse(403, { detail: 'no' }))
+    const api = makeApi()
+    expect(await api.updatePerson('5', { firstName: 'Ada' })).toEqual({ status: 'ok' })
+    expect(await api.reactivatePerson('5')).toEqual({ status: 'ok' })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people/5`)
+    expect(fetchSpy.mock.calls[1][0]).toBe(`${BASE}/api/v1/people/5/reactivate`)
+    await expect(api.listPersonMemberships('5')).rejects.toThrow()
+  })
+
+  it("shows the server's detail on a 403 from a People write", async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(403, { detail: "You can't do this to your own record." }))
+    expect(await makeApi().deactivatePerson('5')).toEqual({
+      status: 'rejected',
+      message: "You can't do this to your own record.",
+    })
+  })
+
+  it('unlinkExpa maps a person row to ok', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(200, { ...PERSON_ROW, expaLinked: false }))
+    expect(await makeApi().unlinkExpa('5')).toEqual({ status: 'ok' })
+    expect(fetchSpy.mock.calls[0][0]).toBe(`${BASE}/api/v1/people/5/unlink-expa`)
+    expect((fetchSpy.mock.calls[0][1] as RequestInit).method).toBe('POST')
+  })
+
+  it('unlinkExpa shows the server reason, and a 404 says the person no longer exists', async () => {
+    fetchSpy.mockReturnValueOnce(jsonResponse(400, { detail: "This person isn't linked to EXPA." }))
+    expect(await makeApi().unlinkExpa('5')).toEqual({ status: 'rejected', message: "This person isn't linked to EXPA." })
+    fetchSpy.mockReturnValueOnce(jsonResponse(404, { detail: 'Not found' }))
+    const gone = await makeApi().unlinkExpa('5')
+    expect(gone.status === 'rejected' && gone.message).toMatch(/no longer exists/)
+  })
+
+  it('unlinkExpa with an id that is not a database id is refused without calling the backend', async () => {
+    expect((await makeApi().unlinkExpa('p-ada')).status).toBe('rejected')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('a person id that is not a database id is refused without calling the backend', async () => {
+    const result = await makeApi().deactivatePerson('p-ada')
+    expect(result.status).toBe('rejected')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})
