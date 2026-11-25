@@ -6,7 +6,7 @@ Covers all ticket acceptance criteria:
 - LC isolation for non-MC users
 - Transfer: existing email links person and ends active memberships in other LCs
 - Every write writes to audit_log
-- Test double authentication (no real Google sign-in needed)
+- Test double authentication (no real EXPA sign-in needed)
 
 The fixture never hard-codes primary keys: lookup rows (functions, positions)
 that the baseline seeds also create are fetched by `key`, and everything else

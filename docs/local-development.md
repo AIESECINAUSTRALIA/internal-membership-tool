@@ -18,20 +18,20 @@ Two ways to run the stack locally:
 Every path needs the `.env` file first — `cp .env.example .env` (see
 [Environment variables & secrets](#environment-variables--secrets)).
 
-> **Authentication transition (DEV-82 / DEV-83).** The backend now uses
-> EXPA OAuth and server-side sessions instead of Supabase JWTs.
+> **Authentication (DEV-82 / DEV-83).** Sign-in uses EXPA OAuth and server-side
+> sessions. The backend handles the OAuth exchange; the frontend uses the
+> backend's HttpOnly session cookie.
+>
 > Backend configuration uses `EXPA_AUTH_URL`, `EXPA_GRAPHQL_URL`,
 > `EXPA_CLIENT_ID`, `EXPA_CLIENT_SECRET`, `APP_BASE_URL`,
-> `SESSION_TTL_HOURS` and `ALLOWED_EMAIL_DOMAINS`.
+> `SESSION_TTL_HOURS` and `ALLOWED_EMAIL_DOMAINS`. The frontend's
+> `VITE_AUTH_MODE` chooses between development sign-in (`mock`) and real
+> EXPA sign-in (`expa`).
 >
-> The frontend still uses Supabase until DEV-83. Its existing
-> `VITE_SUPABASE_*` and `VITE_AUTH_MODE` instructions are retained
-> for reference, but real frontend authentication will not work
-> against the new backend until DEV-83 is merged.
->
-> Backend tests mock EXPA and require no real OAuth credentials.
+> Backend tests mock EXPA and require no real OAuth credentials. The frontend's
+> mock mode also needs no credentials or running backend.
 > Live EXPA authentication requires an HTTPS callback registered
-> with EXPA and matching deployment configuration.
+> with EXPA and matching deployment configuration. See `docs/auth.md`.
 
 ### Prerequisites
 
@@ -128,8 +128,20 @@ npm ci                           # first time / after dependency changes
 npm run dev                      # http://localhost:5173
 ```
 
-`VITE_API_URL` in `.env` (default `http://localhost:8000`) points the browser app
-at the API. Other commands: `npm run test`, `npm run lint`, `npm run build`.
+The frontend calls the API at the relative path `/api`. Vite's development proxy
+forwards those requests to `http://localhost:8000` by default, so the browser
+doesn't need to know where the backend runs.
+
+When the frontend runs in Docker, `docker-compose.yml` sets
+`API_PROXY_TARGET=http://backend:8000` instead (the backend's service name on
+the compose network). The browser still sees `http://localhost:5173/api`.
+
+For a native frontend talking to a backend on a different address or port,
+set `API_PROXY_TARGET` in the shell before starting Vite. It is a development
+server setting, not a `VITE_` variable: it is never exposed to the browser
+or included in the production build.
+
+Other commands: `npm run test`, `npm run lint`, `npm run build`.
 
 ### Which one?
 
@@ -180,14 +192,17 @@ Then fill in `.env`:
 - **Postgres vars** (`POSTGRES_*`, `DATABASE_URL`) — leave the placeholder
   values as-is. The local database is a throwaway Docker container; these are
   not secrets.
-- **Supabase vars** (`SUPABASE_*`, `VITE_SUPABASE_*`) — real values. Get them
-  from the shared store (below), not by asking in Slack. *(Being replaced by `EXPA_*`
-  settings when EXPA sign-in lands. Until then, `VITE_AUTH_MODE=mock` needs none of
-  them.)*
-- **Sign-in vars** (`VITE_AUTH_MODE`, `ALLOWED_EMAIL_DOMAINS`,
-  `VITE_GOOGLE_HOSTED_DOMAIN`) — leave `VITE_AUTH_MODE=mock` to use the development
-  sign-in with no Supabase at all. Set it to `supabase` for real Google sign-in; that
-  needs the one-time setup in [`docs/auth.md`](auth.md).
+- **Backend sign-in settings** (`APP_BASE_URL`, `FRONTEND_ORIGIN`,
+  `SESSION_TTL_HOURS`, `ALLOWED_EMAIL_DOMAINS`) — leave the local defaults
+  as-is for ordinary development. `APP_BASE_URL` determines the OAuth callback
+  URL and whether cookies are marked Secure; `FRONTEND_ORIGIN` is where the
+  browser lands after sign-in. See [`docs/auth.md`](auth.md) for the full list
+  and what each setting does.
+- **Frontend sign-in mode** (`VITE_AUTH_MODE`) — leave it at `mock` to use
+  the development sign-in with no EXPA credentials at all. Set it to `expa`
+  for real EXPA sign-in; that needs the one-time setup in
+  [`docs/auth.md`](auth.md), including a registered HTTPS callback URL.
+  The default local HTTP stack is not enough for live EXPA sign-in.
 
 ### Where the real values live
 
@@ -211,6 +226,11 @@ access granted by role via the MC.
   own — pass it with `uv run --env-file ../.env`, and override `DATABASE_URL` to
   a `localhost` host/port (an inline or exported value wins over `--env-file`).
   Full steps in [Running the app → Manual path](#manual-path-no-docker-for-the-app).
+- **Native frontend:** Vite runs from `frontend/` and does not automatically
+  read the repository-root `.env`. The default sign-in mode is `mock`.
+  To override `VITE_AUTH_MODE` or the development server's `API_PROXY_TARGET`,
+  set the variable in the shell running Vite. Restart the dev server after
+  changing it.
 
 ### Deployed environments
 
@@ -235,26 +255,25 @@ apps (dev uses EXPA staging). Never point local dev at prod.
 Spec §2A.3: the development sign-in (the plain "Sign in" button and `?as=` personas) must
 be **off in every deployed environment**.
 
-> **Changing.** The bullets below describe today's code (Supabase/Google, Vercel). After
-> the EXPA sign-in tickets land:
-> - `VITE_AUTH_MODE` becomes `mock | expa`, and production builds default to `expa`.
-> - The backend accepts only its own server-side session cookie (`__session`), created
->   after a successful EXPA sign-in.
-> - Deployed builds are on Firebase Hosting, not Vercel.
->
-> The rule doesn't change: no mock sign-in on dev or prod.
+How it's enforced:
 
-How it's enforced today:
-
-- **Frontend:** a production build (`npm run build`, which is what Vercel runs) uses real
-  Google sign-in unless `VITE_AUTH_MODE=mock` is set explicitly
-  (`frontend/src/api/authMode.ts`). On Vercel, **Preview and Production must set
-  `VITE_AUTH_MODE=supabase` or leave it unset — never `mock`.** They also need
-  `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` and `VITE_API_URL`.
-- **Backend:** there is no sign-in stub. Every API request needs a valid Supabase access
-  token, from `SUPABASE_URL`'s project, for an email in `ALLOWED_EMAIL_DOMAINS`.
-- The mock lives only in the browser and the backend trusts only Supabase-signed
-  tokens, so even a wrongly configured frontend can't get real access with it.
+- **Frontend:** a production build (`npm run build`, which produces the files
+  served by Firebase Hosting) always uses real EXPA sign-in
+  (`frontend/src/api/authMode.ts`). Even setting `VITE_AUTH_MODE=mock` explicitly
+  cannot turn on the development sign-in in a production build. The dev server
+  and tests default to `mock`; they can opt into `expa` for real sign-in.
+- **Backend:** there is no sign-in stub. Every protected API request needs a
+  valid server-side session, established after a successful EXPA sign-in.
+  The backend checks the EXPA account's email against `ALLOWED_EMAIL_DOMAINS`
+  and requires an active membership before issuing a session. The browser
+  sends the HttpOnly `__session` cookie with subsequent API requests.
+- **Hosting:** Firebase Hosting serves the frontend and forwards `/api/**`
+  to Cloud Run, so the frontend and API share one origin. The frontend uses
+  relative API URLs with `credentials: 'same-origin'`. There is no frontend
+  API hostname or OAuth client secret to configure. The same production build
+  can be used on both dev and prod.
+- The mock lives only in the browser and cannot create a valid backend session,
+  so even a wrongly configured frontend can't get real access with it.
 
 Details: [`docs/auth.md`](auth.md).
 
@@ -288,10 +307,16 @@ chat or ticket, or otherwise exposed.
 ## Using the real backend for Profile
 
 Profile's custom fields (`getMyCustomFields`, `updateMyCustomFields`) come from the real
-API whenever you sign in for real (`VITE_AUTH_MODE=supabase`). In `mock` mode they come
+API whenever you sign in for real (`VITE_AUTH_MODE=expa`). In `mock` mode they come
 from the mock like everything else (`docs/frontend.md`).
 
-1. Set up real sign-in once: `docs/auth.md`, "One-time setup (Supabase + Google)".
+Live EXPA sign-in requires a configured HTTPS environment and a callback URL
+registered with EXPA. The default local HTTP stack does not meet that requirement.
+Use the development sign-in for ordinary local frontend work.
+
+1. Set up real sign-in once: `docs/auth.md`, "EXPA backend setup". Use a
+   development environment with the registered HTTPS callback, never prod.
+
 2. The seeds don't create people, LCs or terms, so add yourself once, with the
    `@aiesec.net` email you sign in with:
 
@@ -308,7 +333,8 @@ from the mock like everything else (`docs/frontend.md`).
          AND pos.key = 'member' AND t.name = 'Dev term';"
    ```
 
-   Make sure the membership dates cover today, or you'll land on the not-allocated page.
+   Make sure the membership dates cover today, or sign-in will be refused
+   with the not-allocated message.
 3. `make seed` (if you haven't) so there are custom fields to edit, then restart:
    `make down && make up`. Vite reads env vars only at startup.
-4. Sign in with Google. Profile now shows and saves your real fields.
+4. Sign in with EXPA. Profile now shows and saves your real fields.

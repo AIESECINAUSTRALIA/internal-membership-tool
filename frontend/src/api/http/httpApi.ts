@@ -8,11 +8,11 @@
  * Every other method comes from `options.fallback` (today, the mock), so the rest
  * of the app keeps running while those backend tickets are still in progress.
  *
- * AUTH: this file doesn't know how people sign in. The caller passes
- * `getAuthHeaders()`, which runs before every request. Supabase mode returns
- * `{ Authorization: 'Bearer <access token>' }` (see `api/index.ts`); a cookie
- * session (EXPA sign-in, later) can return `{}`. The backend decides who the
- * caller is from those headers alone — never from anything else we send.
+ * AUTH: this file doesn't know how people sign in. The browser sends the
+ * backend's HttpOnly session cookie with every request (`credentials: 'same-origin'`).
+ * The backend decides who the caller is from that session, never from anything
+ * else we send. A 401 notifies the authentication provider that the session
+ * may have expired or been revoked.
  *
  * URL SHAPE (backend route → frontend method):
  *   POST /api/v1/members/summary           → listMembers
@@ -78,15 +78,14 @@ const STALE_FORM: { status: 'rejected'; message: string } = {
 // ---------------------------------------------------------------------------
 
 export interface HttpApiOptions {
-  /** Headers that prove who is calling. Supabase mode: { Authorization: 'Bearer …' }.
-   *  Cookie-session sign-in (EXPA, later): {}. Called before every request, so a
-   *  refreshed token is always picked up. */
-  getAuthHeaders: () => Promise<Record<string, string>>
   /** The API origin. '' = same origin (Firebase Hosting forwards /api/**). */
   baseUrl?: string
-  /** The `Api` that still answers the non-membership methods (today, the mock). */
+  /** The `Api` that still answers methods without backend endpoints (today, the mock). */
   fallback: Api
+  /** Called when the backend rejects an expired, revoked or missing session. */
+  onUnauthorized?: () => void
 }
+
 
 // ---------------------------------------------------------------------------
 // HTTP helpers
@@ -121,20 +120,32 @@ interface Transport {
   get<T>(path: string): Promise<T>
 }
 
-function createTransport(options: HttpApiOptions): Transport {
-  const baseUrl = options.baseUrl ?? import.meta.env.VITE_API_URL ?? ''
 
-  async function request<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown): Promise<T> {
-    const headers = { 'Content-Type': 'application/json', ...(await options.getAuthHeaders()) }
+function createTransport(options: HttpApiOptions): Transport {
+  const baseUrl = (options.baseUrl ?? '').replace(/\/+$/, '')
+
+  async function request<T>(
+    method: 'GET' | 'POST' | 'PATCH',
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
     const res = await fetch(`${baseUrl}${path}`, {
       method,
-      headers,
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     })
+
     if (!res.ok) {
+      if (res.status === 401) {
+        options.onUnauthorized?.()
+      }
+
       const text = await res.text().catch(() => res.statusText)
       throw new HttpError(method, path, res.status, text)
     }
+
     return res.json() as Promise<T>
   }
 

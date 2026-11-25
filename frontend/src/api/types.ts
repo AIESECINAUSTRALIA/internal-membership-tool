@@ -477,10 +477,10 @@ export interface Api {
   // Session
   /** The signed-in person, or null when signed out or the session expired. */
   getMe(): Promise<Me | null>
-  /** 'google' for real sign-in (api/supabaseSession.ts); unset means the development
+  /** 'expa' for real sign-in (api/expaSession.ts); unset means the development
    * placeholder (the mock). The sign-in page shows the matching button (§2A.3). */
-  readonly signInMethod?: 'mock' | 'google'
-  /** Mock: signs in as a persona. Google: leaves for Google's sign-in page (§2A.3, §9). */
+  readonly signInMethod?: 'mock' | 'expa'
+  /** Mock: signs in as a persona. EXPA: leaves for EXPA's sign-in page (§2A.3, §9). */
   signIn(): Promise<void>
   signOut(): Promise<void>
   /** Calls `listener` whenever the signed-in identity may have changed outside the app's

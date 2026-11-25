@@ -1,7 +1,8 @@
 """The whole sign-in path, end to end (spec §9, §3.2, §8.4).
 
-Each test starts from a signed access token, as the browser would send it after
-Google sign-in, and goes through the real API and database:
+Exercises EXPA sign-in and server-side session handling through the real API
+and database, with EXPA's external endpoints stubbed out.
+EXPA sign-in, and goes through the real API and database:
 
     token → verify → email → person → active memberships → permissions
                                                         → one audit entry per sign-in

@@ -31,9 +31,13 @@ The backend runs the OAuth exchange and keeps its own short server-side sessions
 is plain Postgres reached by connection string. Design and reasons:
 `docs/superpowers/specs/2026-11-09-gcp-deployment-design.md`.
 
-> **In transition.** Supabase and Vercel are being retired. Until the EXPA sign-in
-> tickets land, the code still signs in with Google through Supabase Auth
-> (`docs/auth.md`). Don't build new work on Supabase.
+> **Authentication:** EXPA sign-in is implemented in the backend (DEV-82) and
+> frontend (DEV-83). The frontend uses relative `/api` URLs and the backend's
+> HttpOnly session cookie. Mock sign-in is available for local development
+> and tests only (`docs/auth.md`). Live sign-in on the dev environment must
+> still be verified against EXPA staging before DEV-83 is accepted.
+>
+> Supabase and Vercel are being retired. Don't build new work on either.
 
 ### Running it
 
