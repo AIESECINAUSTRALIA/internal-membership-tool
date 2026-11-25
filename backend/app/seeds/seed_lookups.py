@@ -16,12 +16,14 @@ from sqlalchemy.orm import Session
 from app.db.session import SessionLocal
 from app.models.org import Function, Position
 
-# Lower `rank` = more senior, by UI convention only — spec §2.
+# Spec §2: a HIGHER `rank` is a HIGHER position (Member = 1 ... MCP = 7). The
+# permission code compares ranks (§3.4), so this order matters.
+# `can_add_same_rank` is the president exception: an LCP may add another LCP (§3.4).
 POSITIONS: list[dict[str, object]] = [
-    {"key": "lcp", "label": "LC President", "rank": 1},
-    {"key": "lcvp", "label": "LC Vice President", "rank": 2},
-    {"key": "team_leader", "label": "Team Leader", "rank": 3},
-    {"key": "member", "label": "Member", "rank": 4},
+    {"key": "lcp", "label": "LC President", "rank": 4, "level": "lc", "can_add_same_rank": True},
+    {"key": "lcvp", "label": "LC Vice President", "rank": 3, "level": "lc"},
+    {"key": "team_leader", "label": "Team Leader", "rank": 2, "level": "lc"},
+    {"key": "member", "label": "Member", "rank": 1, "level": "lc"},
 ]
 
 FUNCTIONS: list[dict[str, object]] = [
