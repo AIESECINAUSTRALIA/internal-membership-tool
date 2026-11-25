@@ -38,7 +38,7 @@ screen.
 | 3 | Term handover: who adds whom | Not written yet: the Memberships screen now exists |
 | 4 | Changing permissions, and the "you can't grant what you don't hold" rule | Not written yet: the Permission matrix screen isn't built |
 | 5 | [Adding or retiring a KPI, function or position](05-kpis-functions-positions.md) | Positions and functions written (screenshots still to take). The KPI part isn't written yet |
-| 6 | Processing a deletion request (the manual procedure for now) | Not written yet |
+| 6 | [Processing a deletion request](06-deletion-requests.md) (the manual procedure for now) | Written. Has two `TODO`s: the register's link, and the timings to confirm with the privacy consult |
 | 7 | Reading the audit log | Not written yet: the Auditing screen isn't built |
 | 8 | Restoring from a backup | Not written yet: comes with the deployment work |
 | 9 | Recovering admin access if every admin is locked out | Not written yet: comes with the admin lockout recovery ticket |
@@ -80,9 +80,9 @@ These rules keep the guides usable by someone with no context, years from now.
 
 ### The exception: emergency procedures
 
-Guides 8 (restoring from a backup) and 9 (recovering admin access) cover situations
-where the Admin console itself can't help, so they may include a command to copy and
-paste. When they do:
+Guides 6 (processing a deletion request, until the in-app workflow exists), 8 (restoring
+from a backup) and 9 (recovering admin access) cover situations where the Admin console
+itself can't help, so they may include a command to copy and paste. When they do:
 
 - Put the command in its own box, on its own, under a heading that says what it does.
 - Say exactly what to change in it (in `CAPITALS`), and that everything else must be

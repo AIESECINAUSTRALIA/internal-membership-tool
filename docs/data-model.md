@@ -174,7 +174,8 @@ Subsequent sign-ins match by EXPA ID first, rather than relying
 on email remaining unchanged.
 
 Anonymised people cannot authenticate. The anonymisation workflow
-must clear `expa_id` when implemented.
+must clear `expa_id` when implemented. Until then, the manual procedure in
+`docs/admin-guide/06-deletion-requests.md` clears it and revokes the person's sessions.
 
 ### `user_session`
 
