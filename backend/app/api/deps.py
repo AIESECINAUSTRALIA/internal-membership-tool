@@ -10,24 +10,19 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Annotated
 
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import func, select
+from fastapi import Depends, HTTPException, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import Settings, get_settings
-from app.core.auth import AuthenticatedUser, AuthError, TokenVerifier, build_token_verifier
+from app.core.auth import AuthenticatedUser
+from app.core.sessions import get_valid_session
 from app.db.session import SessionLocal
 from app.models.membership import Membership
-from app.models.person import Person, PersonStatus
+from app.models.person import SIGN_IN_BLOCKED, Person
 from app.repositories.membership import (
     build_membership_context,
     get_active_memberships_for_person,
 )
-
-# `auto_error=False` so a missing header reaches our code and gets the same 401 as a
-# bad token, rather than FastAPI's default 403.
-_bearer = HTTPBearer(auto_error=False)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -42,56 +37,54 @@ def get_db() -> Generator[Session, None, None]:
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_token_verifier(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> TokenVerifier | None:
-    """Returns None when auth is not configured; only raises when misconfigured."""
-    if not settings.supabase_url:
-        return None
-    try:
-        return build_token_verifier(settings)
-    except AuthError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+def get_current_user(request: Request, db: DbSession) -> AuthenticatedUser:
+    """The caller, from their `__session` cookie. 401 without a valid session.
 
+    The cookie holds a random token; we look up its hash in `user_session` (see
+    `app/core/sessions.py`). The allowed-email-domain check is NOT repeated here: it
+    runs once, at sign-in. A session therefore outlives a change to
+    ALLOWED_EMAIL_DOMAINS by at most SESSION_TTL_HOURS (docs/auth.md).
+    """
+    token = request.cookies.get("__session")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not signed in")
 
-def get_current_user(
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
-    verifier: Annotated[TokenVerifier | None, Depends(get_token_verifier)],
-) -> AuthenticatedUser:
-    """The caller, from their Supabase access token. 401 without a valid one."""
-    if credentials is None:
-        raise HTTPException(
-            status_code=401,
-            detail="Not signed in",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    if verifier is None:
-        raise HTTPException(status_code=503, detail="Authentication is not configured")
-    try:
-        return verifier.verify(credentials.credentials)
-    except AuthError as exc:
-        headers = {"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None
-        raise HTTPException(
-            status_code=exc.status_code, detail=exc.detail, headers=headers
-        ) from exc
+    session = get_valid_session(db, token)
+    if session is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    person = db.get(Person, session.person_id)
+    if person is None or person.status in SIGN_IN_BLOCKED:
+        raise HTTPException(status_code=401, detail="Account is unavailable")
+
+    if not person.expa_id:
+        raise HTTPException(status_code=401, detail="EXPA identity is not linked")
+
+    return AuthenticatedUser(
+        subject=person.expa_id,
+        email=person.aiesec_email.lower(),
+    )
 
 
 CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 
 
 def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
-    """The `person` whose `aiesec_email` matches the signed-in email (spec §9).
+    """The signed-in `person`, matched by their linked EXPA id (spec §9).
 
-    None when nobody matches. An ANONYMISED person also counts as no match: after a
-    deletion request their record must never sign anyone in again (spec §8). So does
-    an INACTIVE one: an admin deactivated them (Admin console, DEV-47), and they lose
-    access straight away rather than when their memberships' dates run out.
+    An ANONYMISED or INACTIVE person never counts as a match: after a deletion
+    request or a deactivation their record must not sign anyone in (spec §8).
     """
-    stmt = select(Person).where(
-        func.lower(Person.aiesec_email) == user.email,
-        Person.status.not_in([PersonStatus.ANONYMISED, PersonStatus.INACTIVE]),
+    return (
+        db.execute(
+            select(Person).where(
+                Person.expa_id == user.subject,
+                Person.status.not_in(SIGN_IN_BLOCKED),
+            )
+        )
+        .scalars()
+        .first()
     )
-    return db.execute(stmt).scalars().first()
 
 
 CurrentPerson = Annotated[Person | None, Depends(get_current_person)]
@@ -115,8 +108,8 @@ class CurrentActor:
 def get_current_actor(person: CurrentPerson, db: DbSession) -> CurrentActor:
     """Resolve the authenticated actor and their active memberships.
 
-    Authentication is handled by CurrentPerson, which depends on
-    the verified user from CurrentUser.
+    Authentication is handled by CurrentPerson, which depends on the session from
+    CurrentUser. The acting membership is the one with the highest-ranked position.
     """
     if person is None:
         raise HTTPException(

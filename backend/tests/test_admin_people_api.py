@@ -24,15 +24,18 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import CurrentActor, get_current_actor, get_current_person, get_db
 from app.core.auth import AuthenticatedUser
+from app.core.sessions import activate_session, create_pending_session, get_valid_session
 from app.main import app
 from app.models.kpi import KpiRecord, KpiSource
 from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
+from app.repositories import admin_people as admin_people_repo
 from app.repositories import membership as membership_repo
 from app.repositories.kpi import record_kpi
 from tests.helpers import (
+    api_client_options,
     make_function,
     make_kpi_attribute,
     make_lc,
@@ -58,6 +61,11 @@ def _position(session: Session, *, key: str, rank: int) -> Position:
         session.add(position)
     position.rank = rank
     position.active = True
+    # Seeded rows may carry admin-edited values (DEV-0049), and a new row defaults to
+    # "no president exception". Set what these tests assume: only the presidents may
+    # add another holder of their own position.
+    position.can_add_same_rank = key in {"lcp", "mcp"}
+    position.level = None  # None: decided by key
     session.flush()
     return position
 
@@ -138,6 +146,9 @@ def admin(db_session: Session) -> Generator[Fixture, None, None]:
     )
 
     target = make_person(db_session, full_name="Tess Target", email="test-adm-target@aiesec.net")
+    # EXPA sign-in finds people by this id, so the sign-in tests need it set.
+    target.expa_id = "test-expa-target"
+    db_session.flush()
     target_membership = make_membership(
         db_session,
         person=target,
@@ -151,7 +162,7 @@ def admin(db_session: Session) -> Generator[Fixture, None, None]:
 
     app.dependency_overrides[get_db] = lambda: db_session
     app.dependency_overrides[get_current_actor] = lambda: actors["mcp"]
-    with TestClient(app) as client:
+    with TestClient(app, **api_client_options()) as client:
         yield Fixture(
             client=client,
             session=db_session,
@@ -227,6 +238,7 @@ def test_mc_and_admin_positions_can_list_people(admin: Fixture, actor_name: str)
         "email": "test-adm-target@aiesec.net",
         "active": True,
         "status": "active",
+        "expaLinked": True,
     }
 
 
@@ -242,6 +254,7 @@ def test_everyone_else_is_refused_on_every_endpoint(admin: Fixture, actor_name: 
         client.patch(f"/api/v1/people/{pid}", json={"firstName": "X"}),
         client.post(f"/api/v1/people/{pid}/deactivate"),
         client.post(f"/api/v1/people/{pid}/reactivate"),
+        client.post(f"/api/v1/people/{pid}/unlink-expa"),
         client.get(f"/api/v1/people/{pid}/memberships"),
         client.post(f"/api/v1/people/{pid}/memberships", json={}),
         client.patch(f"/api/v1/memberships/{mid}", json={"endDate": TODAY.isoformat()}),
@@ -344,6 +357,25 @@ def test_edit_with_no_real_change_writes_no_audit(admin: Fixture) -> None:
     assert _audit(admin.session, "person.edit", admin.target.id) == []
 
 
+def test_edit_name_keeps_an_email_on_a_retired_domain(admin: Fixture) -> None:
+    # An email on a domain that is no longer allowed must not block a name edit.
+    admin.target.aiesec_email = "x@old-domain.org"
+    admin.session.flush()
+
+    renamed = admin.client.patch(f"/api/v1/people/{admin.target.id}", json={"firstName": "Tessa"})
+    assert renamed.status_code == 200, renamed.text
+    assert admin.target.aiesec_email == "x@old-domain.org"
+
+    # Sending the same email back in another case is not a change either.
+    same = admin.client.patch(
+        f"/api/v1/people/{admin.target.id}", json={"email": " X@Old-Domain.org "}
+    )
+    assert same.status_code == 200, same.text
+    assert admin.target.aiesec_email == "x@old-domain.org"
+    entries = _audit(admin.session, "person.edit", admin.target.id)
+    assert [entry.diff for entry in entries] == [{"changed_keys": ["name"]}]
+
+
 def test_edit_refuses_an_email_someone_else_has(admin: Fixture) -> None:
     response = admin.client.patch(
         f"/api/v1/people/{admin.target.id}", json={"email": "test-adm-lcp@aiesec.net"}
@@ -403,7 +435,7 @@ def test_deactivate_ends_current_memberships_and_blocks_sign_in(admin: Fixture) 
     assert admin.target_membership.end_date == YESTERDAY
 
     # They can't sign in any more: `/me` and every endpoint see "no person".
-    user = AuthenticatedUser(subject="sub", email="test-adm-target@aiesec.net")
+    user = AuthenticatedUser(subject="test-expa-target", email="test-adm-target@aiesec.net")
     assert get_current_person(user=user, db=admin.session) is None
 
     person_entries = _audit(admin.session, "person.deactivate", admin.target.id)
@@ -411,9 +443,27 @@ def test_deactivate_ends_current_memberships_and_blocks_sign_in(admin: Fixture) 
         "before": {"status": "ACTIVE"},
         "after": {"status": "INACTIVE"},
         "memberships_ended": [admin.target_membership.id],
+        "sessions_revoked": 0,
     }
     end_entries = _audit(admin.session, "membership.end_term", admin.target_membership.id)
     _assert_no_personal_data(person_entries + end_entries, "Tess", "Target", "test-adm-target")
+
+
+def test_deactivate_revokes_open_sessions(admin: Fixture) -> None:
+    # Sign the target in, the way the callback does: pending row, then activate.
+    pending, _, _ = create_pending_session(admin.session, ttl_hours=12)
+    token = activate_session(
+        admin.session, session=pending, person_id=admin.target.id, ttl_hours=12
+    )
+    admin.session.flush()
+    assert get_valid_session(admin.session, token) is not None
+
+    response = admin.client.post(f"/api/v1/people/{admin.target.id}/deactivate")
+    assert response.status_code == 200, response.text
+
+    assert get_valid_session(admin.session, token) is None
+    entries = _audit(admin.session, "person.deactivate", admin.target.id)
+    assert entries[0].diff["sessions_revoked"] == 1
 
 
 def test_deactivate_keeps_membership_and_kpi_history(admin: Fixture) -> None:
@@ -479,6 +529,97 @@ def test_deactivate_a_membership_that_started_today_ends_it_today(admin: Fixture
     )
     assert admin.client.post(f"/api/v1/people/{new.id}/deactivate").status_code == 200
     assert m.end_date == TODAY  # can't end before it began
+
+
+def _future_membership_for_target(fx: Fixture) -> Membership:
+    """A membership in LC B that starts in 30 days (the target's other one is in LC A)."""
+    return make_membership(
+        fx.session,
+        person=fx.target,
+        lc=fx.lc_b,
+        position=fx.positions["member"],
+        term=fx.term,
+        start=TODAY + timedelta(days=30),
+        end=TODAY + timedelta(days=120),
+    )
+
+
+def _counts_as_member(fx: Fixture, ref_date: date) -> tuple[bool, bool, bool]:
+    """Ask the three "who is a member now" questions on `ref_date`."""
+    contexts = [
+        membership_repo.build_membership_context(fx.session, m)
+        for m in fx.actors["mcp"].active_memberships
+    ]
+    summary = membership_repo.list_members_summary(fx.session, contexts, as_of=ref_date)
+    in_directory = any(row["personId"] == str(fx.target.id) for row in summary["rows"])
+    has_active = bool(
+        membership_repo.get_active_memberships_for_person(fx.session, fx.target.id, as_of=ref_date)
+    )
+    row = admin_people_repo.get_person_row(fx.session, fx.target.id, today=ref_date)
+    return has_active, in_directory, row["active"]
+
+
+def test_deactivated_persons_future_membership_never_counts(admin: Fixture) -> None:
+    _future_membership_for_target(admin)
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/deactivate").status_code == 200
+
+    # The future membership is kept, but once its start date arrives it must not count.
+    assert _counts_as_member(admin, TODAY + timedelta(days=31)) == (False, False, False)
+
+
+def test_reactivation_makes_a_kept_future_membership_count_again(admin: Fixture) -> None:
+    _future_membership_for_target(admin)
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/deactivate").status_code == 200
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/reactivate").status_code == 200
+
+    assert _counts_as_member(admin, TODAY + timedelta(days=31)) == (True, True, True)
+
+
+def test_membership_that_started_today_does_not_count_after_deactivation(
+    admin: Fixture,
+) -> None:
+    new = make_person(admin.session, email="test-adm-today@aiesec.net")
+    make_membership(
+        admin.session,
+        person=new,
+        lc=admin.lc_a,
+        position=admin.positions["member"],
+        term=admin.term,
+        start=TODAY,
+        end=TODAY + timedelta(days=30),
+    )
+    assert admin.client.post(f"/api/v1/people/{new.id}/deactivate").status_code == 200
+
+    assert (
+        membership_repo.get_active_memberships_for_person(admin.session, new.id, as_of=TODAY) == []
+    )
+    assert admin_people_repo.get_person_row(admin.session, new.id, today=TODAY)["active"] is False
+
+
+def test_membership_list_does_not_mark_a_deactivated_persons_membership_current(
+    admin: Fixture,
+) -> None:
+    _future_membership_for_target(admin)
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/deactivate").status_code == 200
+
+    # 31 days on, the kept membership's dates cover the day, but the person is deactivated.
+    rows = admin_people_repo.list_person_memberships(
+        admin.session, admin.target.id, today=TODAY + timedelta(days=31)
+    )
+    assert [r["current"] for r in rows] == [False, False]
+
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/reactivate").status_code == 200
+    rows = admin_people_repo.list_person_memberships(
+        admin.session, admin.target.id, today=TODAY + timedelta(days=31)
+    )
+    assert rows[0]["current"] is True  # newest first: the kept future one
+
+
+def test_alumnus_with_a_current_membership_counts(admin: Fixture) -> None:
+    admin.target.status = PersonStatus.ALUMNUS
+    admin.session.flush()
+
+    assert _counts_as_member(admin, TODAY) == (True, True, True)
 
 
 def test_cannot_deactivate_yourself_or_someone_who_outranks_you(admin: Fixture) -> None:
@@ -573,10 +714,12 @@ def test_assign_in_any_lc_and_transfer_ends_the_old_lc(admin: Fixture) -> None:
     transfer: the old LC's membership ends the day before (§5.1)."""
     start = TODAY + timedelta(days=10)
     result = _assign(admin, admin.target.id, startDate=start.isoformat())
-    assert result["status"] == "created", result
+    assert result["status"] == "ok", result
 
-    new = admin.session.get(Membership, int(str(result["membershipId"])))
-    assert new is not None
+    # A fresh select proves the row was saved, not just returned.
+    new = admin.session.scalars(
+        select(Membership).where(Membership.id == int(str(result["membershipId"])))
+    ).one()
     assert (new.lc_id, new.function_id, new.start_date) == (admin.lc_b.id, admin.fn_b.id, start)
     assert admin.target_membership.end_date == start - timedelta(days=1)
 
@@ -591,8 +734,136 @@ def test_assign_in_any_lc_and_transfer_ends_the_old_lc(admin: Fixture) -> None:
 
 def test_assign_another_function_in_the_same_lc_ends_nothing(admin: Fixture) -> None:
     result = _assign(admin, admin.target.id, lcId=admin.lc_a.id)
-    assert result["status"] == "created", result
+    assert result["status"] == "ok", result
     assert admin.target_membership.end_date == TODAY + timedelta(days=100)
+
+
+def test_transfer_ends_old_team_rows(admin: Fixture) -> None:
+    """A transfer ends the old membership, so its open team row must end with it."""
+    team = Team(lc_id=admin.lc_a.id, function_id=admin.fn_a.id, term_id=admin.term.id, name="T")
+    admin.session.add(team)
+    admin.session.flush()
+    team_row = TeamMember(
+        team_id=team.id,
+        membership_id=admin.target_membership.id,
+        start_date=admin.target_membership.start_date,
+        end_date=None,
+    )
+    admin.session.add(team_row)
+    admin.session.flush()
+
+    start = TODAY + timedelta(days=10)
+    result = _assign(admin, admin.target.id, startDate=start.isoformat())
+    assert result["status"] == "ok", result
+    assert team_row.end_date == TODAY + timedelta(days=9)
+
+
+def test_end_team_rows_never_leaves_a_future_row_outside(admin: Fixture) -> None:
+    """A team row that starts after the new end date ends on its own start date."""
+    team = Team(lc_id=admin.lc_a.id, function_id=admin.fn_a.id, term_id=admin.term.id, name="T")
+    admin.session.add(team)
+    admin.session.flush()
+    row_start = TODAY + timedelta(days=20)
+    team_row = TeamMember(
+        team_id=team.id,
+        membership_id=admin.target_membership.id,
+        start_date=row_start,
+        end_date=None,
+    )
+    admin.session.add(team_row)
+    admin.session.flush()
+
+    membership_repo.end_team_rows(
+        admin.session,
+        membership_id=admin.target_membership.id,
+        end_date=TODAY + timedelta(days=10),
+    )
+    assert team_row.end_date == row_start
+
+
+def test_assign_allowed_when_it_ends_before_another_lc_membership_starts(admin: Fixture) -> None:
+    """A back-to-back transfer doesn't overlap, so it is valid and touches nothing else."""
+    later_start = TODAY + timedelta(days=200)
+    later = make_membership(
+        admin.session,
+        person=admin.target,
+        lc=admin.lc_b,
+        position=admin.positions["member"],
+        function=admin.fn_b,
+        term=admin.term,
+        start=later_start,
+        end=later_start + timedelta(days=100),
+    )
+    target_end = admin.target_membership.end_date
+
+    result = _assign(
+        admin,
+        admin.target.id,
+        lcId=admin.lc_a.id,
+        functionKey=admin.fn_b.key,
+        startDate=(TODAY + timedelta(days=110)).isoformat(),
+        endDate=(later_start - timedelta(days=1)).isoformat(),
+    )
+
+    assert result["status"] == "ok", result
+    assert (later.start_date, later.end_date) == (later_start, later_start + timedelta(days=100))
+    assert admin.target_membership.end_date == target_end
+    assert _audit(admin.session, "membership.end_term", later.id) == []
+
+
+def test_correct_still_works_after_a_transfer(admin: Fixture) -> None:
+    """After a transfer, the old LC's membership can still be corrected."""
+    start = TODAY + timedelta(days=10)
+    assert _assign(admin, admin.target.id, startDate=start.isoformat())["status"] == "ok"
+    old = admin.target_membership
+    assert old.end_date == start - timedelta(days=1)
+
+    result = _correct(
+        admin,
+        old.id,
+        startDate=(TODAY - timedelta(days=120)).isoformat(),
+        endDate=old.end_date.isoformat() if old.end_date else None,
+    )
+    assert result["status"] == "ok", result
+    assert old.start_date == TODAY - timedelta(days=120)
+
+
+def test_assign_refused_when_another_lc_membership_has_not_started(admin: Fixture) -> None:
+    make_membership(
+        admin.session,
+        person=admin.target,
+        lc=admin.lc_b,
+        position=admin.positions["member"],
+        function=admin.fn_b,
+        term=admin.term,
+        start=TODAY + timedelta(days=20),
+        end=TODAY + timedelta(days=120),
+    )
+    memberships_before = admin.session.execute(
+        select(func.count()).select_from(Membership)
+    ).scalar_one()
+    audits_before = admin.session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+
+    result = _assign(
+        admin,
+        admin.target.id,
+        lcId=admin.lc_a.id,
+        functionKey=admin.fn_b.key,
+        startDate=(TODAY + timedelta(days=5)).isoformat(),
+    )
+
+    assert result["status"] == "rejected", result
+    message = str(result["message"])
+    assert "test-admin-lc-b" in message
+    assert (TODAY + timedelta(days=20)).strftime("%d %b %Y") in message
+    assert (
+        admin.session.execute(select(func.count()).select_from(Membership)).scalar_one()
+        == memberships_before
+    )
+    assert (
+        admin.session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+        == audits_before
+    )
 
 
 @pytest.mark.parametrize(
@@ -611,6 +882,18 @@ def test_assign_refuses_bad_input(
     result = _assign(admin, admin.target.id, **overrides)
     assert result["status"] == "rejected"
     assert message in str(result["message"])
+
+
+def test_assign_refuses_a_term_that_does_not_cover_the_start(admin: Fixture) -> None:
+    old_term = make_term(
+        admin.session,
+        name="test-admin-old-term",
+        start=TODAY - timedelta(days=400),
+        end=TODAY - timedelta(days=300),
+    )
+    result = _assign(admin, admin.target.id, termId=old_term.id)
+    assert result["status"] == "rejected"
+    assert result["message"] == "The start date isn't inside the chosen term."
 
 
 def test_assign_refuses_an_lc_position_in_the_mc(admin: Fixture) -> None:
@@ -638,7 +921,7 @@ def test_assign_refuses_an_lc_membership_while_an_mc_one_overlaps(admin: Fixture
 def test_assign_follows_the_hierarchy_rule(admin: Fixture) -> None:
     _act_as("mcd", admin)
     # Below your rank: fine.
-    assert _assign(admin, admin.target.id)["status"] == "created"
+    assert _assign(admin, admin.target.id)["status"] == "ok"
     # At or above your rank: refused.
     other = make_person(admin.session, email="test-adm-promote@aiesec.net")
     higher = _assign(admin, other.id, lcId=admin.mc.id, positionKey="mcvp", functionKey=None)
@@ -653,7 +936,7 @@ def test_assign_follows_the_hierarchy_rule(admin: Fixture) -> None:
 def test_president_exception_lets_an_mcp_add_another_mcp(admin: Fixture) -> None:
     successor = make_person(admin.session, email="test-adm-successor@aiesec.net")
     result = _assign(admin, successor.id, lcId=admin.mc.id, positionKey="mcp", functionKey=None)
-    assert result["status"] == "created", result
+    assert result["status"] == "ok", result
 
 
 def test_assign_refuses_a_deactivated_person(admin: Fixture) -> None:
@@ -662,6 +945,16 @@ def test_assign_refuses_a_deactivated_person(admin: Fixture) -> None:
     result = _assign(admin, admin.target.id)
     assert result["status"] == "rejected"
     assert "Reactivate" in str(result["message"])
+
+
+def test_correct_refuses_a_deactivated_person(admin: Fixture) -> None:
+    ended = admin.target_membership
+    assert admin.client.post(f"/api/v1/people/{admin.target.id}/deactivate").status_code == 200
+    result = _correct(admin, ended.id, endDate=(TODAY + timedelta(days=60)).isoformat())
+    assert result["status"] == "rejected"
+    assert "Reactivate" in str(result["message"])
+    admin.session.refresh(ended)
+    assert ended.end_date != TODAY + timedelta(days=60)  # ended memberships stay ended
 
 
 def test_assign_to_unknown_person_is_404(admin: Fixture) -> None:
@@ -779,6 +1072,43 @@ def test_correct_refuses_dates_that_overlap_another_lc(admin: Fixture) -> None:
     assert "another LC" in str(result["message"])
 
 
+def _add_team_row(admin: Fixture, *, start: date, end: date | None) -> TeamMember:
+    team = Team(lc_id=admin.lc_a.id, function_id=admin.fn_a.id, term_id=admin.term.id, name="T")
+    admin.session.add(team)
+    admin.session.flush()
+    row = TeamMember(
+        team_id=team.id,
+        membership_id=admin.target_membership.id,
+        start_date=start,
+        end_date=end,
+    )
+    admin.session.add(row)
+    admin.session.flush()
+    return row
+
+
+def test_correct_start_later_moves_team_row_start(admin: Fixture) -> None:
+    m = admin.target_membership
+    row = _add_team_row(admin, start=m.start_date, end=None)
+    new_start = TODAY + timedelta(days=30)
+    result = _correct(admin, m.id, startDate=new_start.isoformat())
+    assert result["status"] == "ok", result
+    assert m.start_date == new_start
+    assert row.start_date == new_start
+
+
+def test_correct_start_after_a_team_row_ended_is_refused(admin: Fixture) -> None:
+    m = admin.target_membership
+    old_start = m.start_date
+    row = _add_team_row(admin, start=m.start_date, end=TODAY + timedelta(days=10))
+    result = _correct(admin, m.id, startDate=(TODAY + timedelta(days=30)).isoformat())
+    assert result["status"] == "rejected"
+    assert "team" in str(result["message"])
+    # Refused before anything was written.
+    assert m.start_date == old_start
+    assert row.start_date == old_start
+
+
 def test_correct_refuses_an_end_before_the_start(admin: Fixture) -> None:
     result = _correct(
         admin, admin.target_membership.id, endDate=(TODAY - timedelta(days=150)).isoformat()
@@ -829,3 +1159,90 @@ def test_end_refuses_dates_outside_the_membership(admin: Fixture, days: int, mes
     result = _end(admin, admin.target_membership.id, TODAY + timedelta(days=days))
     assert result["status"] == "rejected"
     assert message in str(result["message"])
+
+
+# ---------------------------------------------------------------------------
+# EXPA link status and unlink
+# ---------------------------------------------------------------------------
+
+
+def test_person_row_shows_expa_link(admin: Fixture) -> None:
+    linked = admin.client.get(f"/api/v1/people?search={admin.target.aiesec_email}").json()
+    assert linked["rows"][0]["expaLinked"] is True
+
+    admin.target.expa_id = None
+    admin.session.flush()
+    unlinked = admin.client.get(f"/api/v1/people?search={admin.target.aiesec_email}").json()
+    assert unlinked["rows"][0]["expaLinked"] is False
+
+
+def test_unlink_expa_clears_id_revokes_sessions_and_audits(admin: Fixture) -> None:
+    pending, _, _ = create_pending_session(admin.session, ttl_hours=12)
+    token = activate_session(
+        admin.session, session=pending, person_id=admin.target.id, ttl_hours=12
+    )
+    admin.session.flush()
+    expa_id = admin.target.expa_id
+    assert expa_id
+
+    response = admin.client.post(f"/api/v1/people/{admin.target.id}/unlink-expa")
+    assert response.status_code == 200, response.text
+    assert response.json()["expaLinked"] is False
+
+    admin.session.refresh(admin.target)
+    assert admin.target.expa_id is None
+    assert get_valid_session(admin.session, token) is None
+
+    entries = _audit(admin.session, "person.unlink_expa", admin.target.id)
+    assert len(entries) == 1
+    assert entries[0].diff == {
+        "before": {"expaLinked": True},
+        "after": {"expaLinked": False},
+        "sessions_revoked": 1,
+    }
+    _assert_no_personal_data(entries, "Tess", "Target", "test-adm-target", expa_id)
+
+
+def test_unlink_expa_refuses_unlinked_self_and_outranking(admin: Fixture) -> None:
+    # Not linked.
+    admin.target.expa_id = None
+    admin.session.flush()
+    unlinked = admin.client.post(f"/api/v1/people/{admin.target.id}/unlink-expa")
+    assert unlinked.status_code == 400
+    assert unlinked.json()["detail"] == "This person isn't linked to EXPA."
+
+    # Yourself, and someone who outranks you.
+    _act_as("mcd", admin)
+    me = admin.actors["mcd"].person
+    mcp = admin.actors["mcp"].person
+    me.expa_id = "test-expa-me"
+    mcp.expa_id = "test-expa-mcp"
+    admin.session.flush()
+
+    own = admin.client.post(f"/api/v1/people/{me.id}/unlink-expa")
+    assert own.status_code == 403
+    assert "your own record" in own.json()["detail"]
+
+    higher = admin.client.post(f"/api/v1/people/{mcp.id}/unlink-expa")
+    assert higher.status_code == 403
+    assert "at or above your own" in higher.json()["detail"]
+    admin.session.refresh(mcp)
+    assert mcp.expa_id == "test-expa-mcp"
+
+    missing = admin.client.post("/api/v1/people/999999999/unlink-expa")
+    assert missing.status_code == 404
+
+
+def test_create_and_patch_cannot_set_expa_id(admin: Fixture) -> None:
+    created = admin.client.post(
+        "/api/v1/people",
+        json={"firstName": "A", "lastName": "B", "email": "test-adm-x@aiesec.net", "expaId": "9"},
+    )
+    assert created.status_code == 422
+
+    patched = admin.client.patch(
+        f"/api/v1/people/{admin.target.id}", json={"firstName": "X", "expaId": "9"}
+    )
+    assert patched.status_code == 422
+    admin.session.refresh(admin.target)
+    assert admin.target.expa_id == "test-expa-target"

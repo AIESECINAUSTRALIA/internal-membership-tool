@@ -17,6 +17,7 @@ Every table lives in a SQLAlchemy model under `backend/app/models/`:
 | `privacy.py` | `audit_log` (later also `deletion_request`) |
 | `attribute.py` | `attribute`, `attribute_value` |
 | `kpi.py` | `kpi_record`, `home_chart_default` |
+| `user_session.py` | `user_session` |
 
 This grouping isn't enforced by anything — it's a convention matching the
 spec's own section breakdown (org-structural lookups vs. the person record
@@ -101,10 +102,18 @@ code or writing a migration.
   checking the permission matrix in a later ticket). It's unique and never
   changes.
 - `label` is what's shown in the UI. It can be renamed freely — nothing else
-  in the schema references it.
-- `position.rank` is a plain integer used only for UI ordering (lower number
-  = more senior, by convention — not enforced by the schema). It has no
-  effect on access control.
+  in the schema references it. Labels are unique ignoring case
+  (`uq_position_label_lower`, `uq_function_label_lower`), so "Member" and
+  "member" can't both exist.
+- `position.rank`: a **higher number is a higher position** (Member = 1 …
+  MCP = 7, spec §2). It drives the hierarchy rule (§3.4): you can only act on
+  someone whose position ranks below yours, and you can only edit a position
+  in the Admin console if it ranks below yours.
+- `position.level` (`'lc'` or `'mc'`) says which kind of entity the position
+  belongs to (§3.6). `position.can_add_same_rank` is the president exception
+  (§3.4): an LCP/MCP may add another holder of the same position. The
+  permission code reads both columns, and falls back to the position's key
+  only while a column is still empty.
 - `active` soft-disables a lookup value without breaking historical rows
   that already reference it (spec §1.5: "renaming or deactivating a lookup
   value must never break historical records that point at it").
@@ -120,8 +129,8 @@ to a person only indirectly, through `membership`.
 
 - `aiesec_email` is unique and is the join key used when someone logs in via
   OAuth (spec §9): the verified email from the identity provider is matched
-  against this column to resolve who's signed in. With EXPA sign-in (planned, see
-  "Known differences" below), it's the **first-sign-in** match. After that the person is
+  against this column to resolve who's signed in. With EXPA sign-in,
+  it's the **first-sign-in** match. After that the person is
   matched by `expa_id`.
 - `status` (`ACTIVE` / `ALUMNUS` / `INACTIVE` / `ANONYMISED`) is a fixed
   lifecycle state, not an admin-editable lookup like `position`/`function` —
@@ -136,7 +145,8 @@ to a person only indirectly, through `membership`.
     One that only started today can't end before it began, so it ends today. Their
     `team_member` rows are cut to the same date, and each end is audit-logged.
   - Memberships that haven't started yet are left alone. Being `INACTIVE` already
-    blocks the access they'd give, and a reactivation keeps them.
+    blocks the access they'd give, and they don't count as current (see "What current
+    member means" under `membership`). A reactivation keeps them.
   - `membership`, `team_member` and `kpi_record` rows all stay, so past totals and
     reports don't change (spec §1.5). `backend/tests/test_admin_people_api.py`
     checks the row counts before and after.
@@ -144,11 +154,51 @@ to a person only indirectly, through `membership`.
   **Reactivate** sets the status back to `ACTIVE` and doesn't restore ended
   memberships: they are history, so the admin assigns a new one. The main app's
   Add member refuses an `INACTIVE` person ("Contact your MC"), so only Reactivate
-  can undo a deactivation.
+  can undo a deactivation. Reactivate always sets `ACTIVE`, even for a former
+  `ALUMNUS`; the admin changes it back by hand if that matters.
 - `anonymised_at` is set when a deletion request results in anonymisation
   (spec §8.2). The actual deletion-request workflow is a separate ticket;
   this column exists now because it's part of the `person` table's shape per
   spec §4.1.
+
+#### EXPA identity
+
+Migration `39a779be658e` adds `person.expa_id`, a nullable,
+unique string containing the person's stable EXPA identifier.
+
+At first successful EXPA sign-in, the backend matches the verified
+AIESEC email to an unlinked local person with an active membership.
+It then stores the EXPA ID.
+
+Subsequent sign-ins match by EXPA ID first, rather than relying
+on email remaining unchanged.
+
+Anonymised people cannot authenticate. The anonymisation workflow
+must clear `expa_id` when implemented.
+
+### `user_session`
+
+Added by migration `39a779be658e`.
+
+Stores pending OAuth attempts and authenticated server-side sessions.
+
+| Column | Purpose |
+|---|---|
+| `id` | Internal primary key |
+| `token_hash` | Unique SHA-256 hash of the session cookie token |
+| `person_id` | Nullable FK to `person`; null during pending OAuth |
+| `oauth_state_hash` | Nullable unique SHA-256 hash of OAuth state |
+| `created_at` | Session creation time |
+| `expires_at` | Absolute expiration time |
+| `revoked_at` | Nullable revocation timestamp |
+
+Raw session tokens and OAuth state values are never stored.
+
+A successful OAuth callback rotates the pending session token,
+links the authenticated person, and establishes a fixed 12-hour
+session by default.
+
+Logout revokes the session. Expired or revoked sessions are rejected.
 
 ### `membership`
 
@@ -187,6 +237,31 @@ A person can have **more than one** concurrent `membership` row (e.g. Team
 Leader in one function, ordinary Member in another) — the repository
 function returns all of them.
 
+#### What "current member" means
+
+A membership counts as current on a day when **both** are true:
+
+1. its dates cover the day (`start_date <= day` and `end_date` is empty or not before the day), and
+2. the person's `status` is not in `SIGN_IN_BLOCKED` (`INACTIVE` and `ANONYMISED`).
+
+So an `ALUMNUS` with a running membership still counts, while an `INACTIVE` or
+`ANONYMISED` person never does. The second part exists because deactivating someone
+keeps their future memberships (so a reactivation restores them): without it, such a
+membership would start counting on its start date. Use the helper
+`is_current_membership(ref_date)` in `repositories/membership.py` for every "current
+member" query. Don't write the date check by hand.
+
+#### Overlaps and upcoming memberships in another LC
+
+`membership_conflict` (`repositories/membership.py`) runs before any new membership is
+written, from both the Admin console's Assign and the main app's Add member. Besides the
+MC/LC and same-function overlap rules, it **refuses a new membership when the person has
+a membership in another LC that hasn't started yet**. A transfer ends the old
+memberships the day before the new one starts, which would otherwise mean cancelling one
+that never began. The Admin console's message names the LC and the start date. Add member
+gets a vaguer one ("…coming up elsewhere. Contact your MC."), because an LC-scoped user
+mustn't learn about another LC's records.
+
 - `function_id` is nullable because some positions (e.g. LCP) aren't tied to
   one function.
 - `is_primary` flags which concurrent membership is a person's "main" one,
@@ -205,6 +280,17 @@ exist before a leader is assigned).
 Join table between `membership` and `team`. Time-scoped the same way as
 `membership` (`start_date`/`end_date`, no in-place mutation) so team history
 is preserved the same way membership history is.
+
+**A `team_member` row stays inside its membership's dates.** (Rows that started before
+a new end date are cut to it. A row that starts after it is closed on its own start day.)
+
+- When a membership ends earlier (end, deactivate, transfer), `end_team_rows` cuts team
+  rows that would outlast it to the new end date. A row that starts *after* the new end
+  date is ended on its own start date, so it becomes the shortest possible row. Nothing
+  is deleted.
+- When a correction moves a membership's start date later, team rows that start earlier
+  are moved forward to the new start. If a team row would then end before it starts, the
+  correction is refused.
 
 ### `audit_log`
 
@@ -534,12 +620,10 @@ the same PR.
 | `person.timezone` | Added, set from the LC of the most recent membership | Same (spec §4.1) |
 | `lc.state` | Added (nullable, FK to `state_timezone`) | Same (spec §4.1) |
 | `membership.end_date` | Nullable | Required when adding a membership (spec §5.3) |
-| `position.rank` | Lower number = more senior (LCP = 1) | Higher number = higher position (Member = 1 … MCP = 7) (spec §2) |
-| `position.level`, `position.can_add_same_rank` | Absent | Added, with a trigger enforcing the level-match rule (spec §3.6, §3.4) |
+| `position.rank` | **Done** (DEV-0049, migration `b4e81d2c9a07`): higher number = higher position | Same (spec §2) |
+| `position.level`, `position.can_add_same_rank` | Added and filled in for the spec §2 keys (DEV-0049). No trigger yet | A trigger enforcing the level-match rule (spec §3.6, §3.4) |
 | Seeded positions | `lcp`, `lcvp`, `team_leader`, `member` | Also `mcd`, `mcvp`, `mcp`, with level and rank from spec §2 |
 | Seeded functions | Ten, including `igv`, `igte`, `mkt` | The fifteen in spec §2. No incoming functions |
-| `person.expa_id` | Absent | Added (unique, nullable): EXPA's person id, stored on first EXPA sign-in. **Anonymisation sets it to `NULL`** (spec §8.2) |
-| `user_session` | Absent | Added: our own server-side sign-in sessions. Stores a SHA-256 of the cookie token (never the token), `person_id`, pending OAuth `state`, `created_at`, `expires_at` (12 h), `revoked_at` (spec §9) |
 | `audit_log` protection | Application code only | DB-level: the runtime role `mt_runtime` gets only `INSERT`/`SELECT` on `audit_log`. Migrations run as a separate migrator role (spec §8.4; GCP design §5.3) |
 
 Two things to watch when fixing the seeds:

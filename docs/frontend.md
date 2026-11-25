@@ -226,7 +226,9 @@ Swap note: the backend scopes an attribute by `function_id`, while the frontend 
 adds, edits, deactivates and reactivates people (spec §1.5, §2A.2). Needs `manage` on
 `person`. There is no delete. Deactivate asks for confirmation and says what it does:
 the person can't sign in, their current memberships end, and nothing is deleted
-(`docs/data-model.md` → `person`).
+(`docs/data-model.md` → `person`). The table has an EXPA column (Linked / Not linked, in
+words); "Unlink EXPA" (linked people only) signs them out, and its confirm dialog says to
+correct a wrong email first, since the next EXPA sign-in links again by email.
 
 `/admin/memberships` (`admin/pages/AdminMembershipsPage.tsx`, dialogs in
 `admin/MembershipDialogs.tsx`) works on one person at a time. Pick them with the person
@@ -243,10 +245,10 @@ so no name or email goes into the URL. Needs `manage` on `membership`.
 The hierarchy rule (§3.4) isn't pre-filtered in the dialogs. The server refuses a
 position at or above the admin's own, and the dialog shows its reason.
 
-Both screens run on the mock: `api/http/httpApi.ts` doesn't call the backend endpoints
-(`/api/v1/people`, `/api/v1/memberships`) yet, the same as LCs and Metrics. The mock
-repeats the backend's rules, and `test/adminPeople.test.tsx` covers both the rules and
-the screens.
+Both screens call the real backend: `api/http/httpApi.ts` sends the admin People and
+Memberships methods (including `unlinkExpa`) to `/api/v1/people` and
+`/api/v1/memberships`. The mock repeats the backend's rules for mock mode, and
+`test/adminPeople.test.tsx` covers both the rules and the screens.
 
 ## Not built yet
 

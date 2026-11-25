@@ -7,6 +7,7 @@ from app.core.permissions import (
     MembershipContext,
     can_add_member,
     can_admin_manage_membership,
+    can_edit_position,
     can_extend_term,
     can_manage_attribute,
     can_manage_lc,
@@ -395,3 +396,51 @@ def test_president_exception_applies_to_adding_only() -> None:
     )
     assert _admin_check(mcp, key="mcp", rank=7, adding=True) == (True, None)
     assert _admin_check(mcp, key="mcp", rank=7, adding=False)[0] is False
+
+
+# ---------------------------------------------------------------------------
+# Editing positions (DEV-0049, spec §3.4): you may only change a position ranked
+# below your own, and only give it a rank below your own. So an MCD can't
+# out-rank the MCP, and nobody can raise a position to their own level.
+# ---------------------------------------------------------------------------
+
+
+def _context_with_rank(rank: int) -> MembershipContext:
+    return MembershipContext(
+        membership_id=1, person_id=1, lc_id=1, position_key="test", position_rank=rank
+    )
+
+
+@pytest.mark.parametrize(
+    ("actor_rank", "current_rank", "new_rank", "allowed"),
+    [
+        (5, 7, None, False),  # MCD renaming the MCP position
+        (5, 5, None, False),  # MCD editing their own position
+        (5, 4, 6, False),  # MCD lifting LCP above themselves
+        (5, 4, 5, False),  # MCD lifting LCP to their own rank
+        (5, 4, 3, True),  # MCD moving LCP down
+        (5, 4, None, True),  # MCD renaming LCP
+        (5, None, 4, True),  # creating a position below yourself
+        (5, None, 5, False),  # creating a position at your own rank
+        (5, None, None, True),  # a legacy position with no rank yet
+        (8, 7, 7, True),  # the admin position can edit the MCP
+    ],
+)
+def test_can_edit_position(
+    actor_rank: int, current_rank: int | None, new_rank: int | None, allowed: bool
+) -> None:
+    result = can_edit_position(
+        [_context_with_rank(actor_rank)], current_rank=current_rank, new_rank=new_rank
+    )
+
+    assert result is allowed
+
+
+def test_can_edit_position_uses_highest_membership() -> None:
+    contexts = [_context_with_rank(3), _context_with_rank(6)]
+
+    assert can_edit_position(contexts, current_rank=5, new_rank=None) is True
+
+
+def test_nobody_without_a_membership_can_edit_positions() -> None:
+    assert can_edit_position([], current_rank=None, new_rank=1) is False

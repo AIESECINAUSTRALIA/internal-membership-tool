@@ -2,7 +2,7 @@ import { TextField, Typography } from '@mui/material'
 import { useState } from 'react'
 
 import { useApi } from '../api/ApiContext'
-import type { AdminPersonRow } from '../api/types'
+import type { AdminPersonInput, AdminPersonRow } from '../api/types'
 import { fullName } from '../lib/labels'
 import { AdminDialogFrame, type AdminDialogProps } from './AdminDialogFrame'
 
@@ -64,7 +64,13 @@ export function EditPersonDialog({ person, ...props }: AdminDialogProps & { pers
     values.email.trim().toLowerCase() !== person.email.toLowerCase()
 
   const submit = async () => {
-    const result = await api.updatePerson(person.id, values)
+    // Send only what was edited, so the server never re-checks a field the admin left alone
+    // (an old email on a retired domain must not block a name change).
+    const changes: Partial<AdminPersonInput> = {}
+    if (values.firstName.trim() !== person.firstName) changes.firstName = values.firstName
+    if (values.lastName.trim() !== person.lastName) changes.lastName = values.lastName
+    if (values.email.trim().toLowerCase() !== person.email.toLowerCase()) changes.email = values.email
+    const result = await api.updatePerson(person.id, changes)
     return result.status === 'ok' ? null : result.message
   }
 
@@ -77,9 +83,16 @@ export function EditPersonDialog({ person, ...props }: AdminDialogProps & { pers
       submit={submit}
     >
       <PersonFields {...values} onChange={(field, value) => setValues((v) => ({ ...v, [field]: value }))} />
-      <Typography variant="body2" color="text.secondary">
-        Changing the email changes which account can sign in as this person.
-      </Typography>
+      {person.expaLinked ? (
+        <Typography variant="body2" color="text.secondary">
+          Changing the email doesn&rsquo;t change who signs in: this person is linked to an EXPA account. To fix a wrong
+          match, save the correct email, then use Unlink EXPA.
+        </Typography>
+      ) : (
+        <Typography variant="body2" color="text.secondary">
+          Changing the email changes which account can sign in as this person.
+        </Typography>
+      )}
     </AdminDialogFrame>
   )
 }
@@ -117,6 +130,28 @@ export function SetPersonActiveDialog({
           membership history and KPI records stay as they are, and you can reactivate them later.
         </Typography>
       )}
+    </AdminDialogFrame>
+  )
+}
+
+/** Unlink EXPA. Says why the order matters: unlinking alone doesn't fix a wrong match,
+ * because the next EXPA sign-in links again by AIESEC email. */
+export function UnlinkExpaDialog({ person, ...props }: AdminDialogProps & { person: AdminPersonRow }) {
+  const api = useApi()
+  const name = fullName(person.firstName, person.lastName)
+
+  const submit = async () => {
+    const result = await api.unlinkExpa(person.id)
+    return result.status === 'ok' ? null : result.message
+  }
+
+  return (
+    <AdminDialogFrame {...props} title={`Unlink EXPA for ${name}`} submitLabel="Unlink" canSubmit submit={submit}>
+      <Typography>
+        Unlink this person&rsquo;s EXPA account? They&rsquo;ll be signed out. The next time someone signs in with EXPA
+        using this person&rsquo;s AIESEC email, that account will be linked. To fix a wrong match, correct the email
+        first, then unlink.
+      </Typography>
     </AdminDialogFrame>
   )
 }

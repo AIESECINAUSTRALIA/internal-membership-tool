@@ -180,6 +180,17 @@ def reactivate_person(
     return _save(db, lambda: repo.reactivate_person(db, contexts, person_id).id)
 
 
+@router.post("/{person_id}/unlink-expa", response_model=AdminPersonRow)
+def unlink_expa(
+    person_id: int,
+    contexts: list[MembershipContext] = Depends(require_person_manager),
+    db: Session = Depends(get_db),
+) -> AdminPersonRow:
+    """Remove the person's EXPA link and sign them out. To fix a wrong match, correct
+    the email first: the next sign-in links again by email."""
+    return _save(db, lambda: repo.unlink_expa(db, contexts, person_id).id)
+
+
 @router.get("/{person_id}/memberships", response_model=list[AdminMembershipRow])
 def list_person_memberships(
     person_id: int,
@@ -222,6 +233,6 @@ def assign_membership(
     except repo.PersonNotFoundError:
         raise HTTPException(status_code=404, detail="Person not found") from None
     # Every refusal happens before anything is written, so only success commits.
-    if result["status"] == "created":
+    if result["status"] == "ok":
         db.commit()
     return AdminActionResult(**result)

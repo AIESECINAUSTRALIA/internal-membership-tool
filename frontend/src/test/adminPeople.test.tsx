@@ -6,7 +6,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import dayjs from 'dayjs'
 import { MemoryRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import App from '../App'
 import { AppProviders } from '../AppProviders'
@@ -110,6 +110,43 @@ describe('people rules on the server', () => {
   })
 })
 
+describe('EXPA link rules on the server', () => {
+  const UNLINKED = 'gen-0@aiesec.example' // a seeded person who has never signed in
+
+  it('shows who is linked, and unlinking clears it', async () => {
+    const api = await apiAs('mcvp')
+    expect((await personByEmail(api, SAM)).expaLinked).toBe(true)
+    expect((await personByEmail(api, UNLINKED)).expaLinked).toBe(false)
+
+    expect((await api.unlinkExpa((await personByEmail(api, SAM)).id)).status).toBe('ok')
+    expect((await personByEmail(api, SAM)).expaLinked).toBe(false)
+  })
+
+  it('refuses to unlink someone who is not linked, yourself, or someone who outranks you', async () => {
+    const api = await apiAs('mcvp')
+    const unlinked = await personByEmail(api, UNLINKED)
+    expect(await api.unlinkExpa(unlinked.id)).toEqual({ status: 'rejected', message: "This person isn't linked to EXPA." })
+    const me = await personByEmail(api, RILEY)
+    expect(await api.unlinkExpa(me.id)).toEqual({ status: 'rejected', message: "You can't do this to your own record." })
+    const mcp = await personByEmail(api, MCP)
+    expect((await api.unlinkExpa(mcp.id)).status).toBe('rejected')
+    expect((await personByEmail(api, MCP)).expaLinked).toBe(true)
+  })
+
+  it('refuses someone who no longer exists, and someone without `manage` on `person`', async () => {
+    const api = await apiAs('mcvp')
+    expect((await api.unlinkExpa('p-nobody')).status).toBe('rejected')
+    const lcvp = await apiAs('lcvp')
+    expect((await lcvp.unlinkExpa('p-sam')).status).toBe('rejected')
+  })
+
+  it('a person added on the console starts not linked', async () => {
+    const api = await apiAs('mcvp')
+    await api.createPerson({ firstName: 'Nina', lastName: 'New', email: 'nina@aiesec.example' })
+    expect((await personByEmail(api, 'nina@aiesec.example')).expaLinked).toBe(false)
+  })
+})
+
 describe('membership rules on the server', () => {
   const assign = (overrides: Record<string, unknown> = {}) => ({
     lcId: 'lc-mu',
@@ -141,6 +178,34 @@ describe('membership rules on the server', () => {
     const result = await api.assignMembership('p-sam', input)
     expect(result.status).toBe('rejected')
     expect(result.status === 'rejected' && result.message).toContain(message)
+  })
+
+  it('refuses a new membership while one in another LC has not started and overlaps', async () => {
+    const api = await apiAs('mcvp')
+    expect((await api.assignMembership('p-sam', assign())).status).toBe('ok') // MU, starts in 5 days
+    const result = await api.assignMembership('p-sam', assign({ lcId: 'lc-unsw', startDate: inDays(2) }))
+    expect(result.status === 'rejected' && result.message).toContain("membership in MU starts on")
+    expect(result.status === 'rejected' && result.message).toContain(dayjs(inDays(5)).format('DD MMM YYYY'))
+    // Not overlapping (the new one ends before MU starts) is still fine.
+    expect((await api.assignMembership('p-sam', assign({ lcId: 'lc-unsw', startDate: inDays(1), endDate: inDays(3) }))).status).toBe('ok')
+  })
+
+  it('Add member refuses the same case with a vague message', async () => {
+    const api = await apiAs('mcvp')
+    expect((await api.assignMembership('p-sam', assign())).status).toBe('ok')
+    const result = await api.addMember({
+      email: SAM,
+      lcId: 'lc-unsw',
+      positionKey: 'lcvp',
+      functionKey: 'bnm',
+      startDate: inDays(2),
+      endDate: inDays(100),
+      confirmedExisting: true,
+    })
+    expect(result).toEqual({
+      status: 'rejected',
+      message: 'This person already has a membership coming up elsewhere. Contact your MC.',
+    })
   })
 
   it('refuses to assign yourself or a deactivated person', async () => {
@@ -183,6 +248,9 @@ describe('the People and Memberships screens', () => {
     return api
   }
 
+  /** The table is paged, so narrow it to one person first. */
+  const searchFor = (text: string) => fireEvent.change(screen.getByLabelText('Search people'), { target: { value: text } })
+
   const peopleTable = () => screen.findByRole('table', { name: 'People' })
 
   async function chooseAction(table: HTMLElement, rowText: string, action: string) {
@@ -202,6 +270,65 @@ describe('the People and Memberships screens', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
     const row = (await within(await peopleTable()).findByText(SAM)).closest('tr')!
     await within(row).findByText('Deactivated')
+  })
+
+  it('has an EXPA column that says Linked or Not linked in words', async () => {
+    await renderAt('/admin/people')
+    const table = await peopleTable()
+    expect(within(table).getByRole('columnheader', { name: 'EXPA' })).toBeInTheDocument()
+    searchFor('sam@')
+    const linked = (await within(table).findByText(SAM)).closest('tr')!
+    expect(within(linked).getByText('Linked')).toBeInTheDocument()
+    searchFor('gen-0@')
+    const unlinked = (await within(table).findByText('gen-0@aiesec.example')).closest('tr')!
+    expect(within(unlinked).getByText('Not linked')).toBeInTheDocument()
+  })
+
+  it('offers Unlink EXPA only for linked people', async () => {
+    await renderAt('/admin/people')
+    const table = await peopleTable()
+    await chooseAction(table, SAM, 'Unlink EXPA') // finds the item, so it is there
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    searchFor('gen-0@')
+    const row = (await within(table).findByText('gen-0@aiesec.example')).closest('tr')!
+    fireEvent.click(within(row).getByRole('button', { name: /^Actions for/ }))
+    await screen.findByRole('menuitem', { name: 'Edit' })
+    expect(screen.queryByRole('menuitem', { name: 'Unlink EXPA' })).not.toBeInTheDocument()
+  })
+
+  it('unlinks after explaining the email order, then shows Not linked', async () => {
+    const api = await renderAt('/admin/people')
+    const unlinkExpa = vi.spyOn(api, 'unlinkExpa')
+    await chooseAction(await peopleTable(), SAM, 'Unlink EXPA')
+
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/correct the email first, then unlink/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/signed out/)).toBeInTheDocument()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Unlink' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(unlinkExpa).toHaveBeenCalledWith('p-sam')
+    const row = (await within(await peopleTable()).findByText(SAM)).closest('tr')!
+    await within(row).findByText('Not linked')
+  })
+
+  it('tells you, when editing a linked person, that the email does not change who signs in', async () => {
+    await renderAt('/admin/people')
+    await chooseAction(await peopleTable(), SAM, 'Edit')
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(/linked to an EXPA account/)).toBeInTheDocument()
+    expect(within(dialog).getByText(/use Unlink EXPA/)).toBeInTheDocument()
+  })
+
+  it('does not say that when editing a person who is not linked', async () => {
+    await renderAt('/admin/people')
+    const table = await peopleTable()
+    searchFor('gen-0@')
+    await chooseAction(table, 'gen-0@aiesec.example', 'Edit')
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).queryByText(/linked to an EXPA account/)).not.toBeInTheDocument()
   })
 
   it('adds a person from the dialog', async () => {
@@ -225,6 +352,19 @@ describe('the People and Memberships screens', () => {
     fireEvent.change(within(dialog).getByLabelText(/AIESEC email/), { target: { value: MORGAN } })
     fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
     expect(await within(dialog).findByText('Someone already has that email address.')).toBeInTheDocument()
+  })
+
+  it('edit person sends only changed fields', async () => {
+    const api = await renderAt('/admin/people')
+    const updatePerson = vi.spyOn(api, 'updatePerson')
+    await chooseAction(await peopleTable(), SAM, 'Edit')
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText(/First name/), { target: { value: 'Samantha' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(updatePerson).toHaveBeenCalledTimes(1)
+    expect(updatePerson.mock.calls[0][1]).toEqual({ firstName: 'Samantha' })
   })
 
   it('opens a person’s memberships from People, and ends one', async () => {

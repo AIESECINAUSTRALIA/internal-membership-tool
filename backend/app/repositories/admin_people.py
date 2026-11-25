@@ -28,18 +28,22 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
-from app.core.permissions import MembershipContext, can_admin_manage_membership, position_level
+from app.core.permissions import MembershipContext, can_admin_manage_membership
+from app.core.sessions import revoke_sessions_for_person
 from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, Position, Term
-from app.models.person import Person, PersonStatus
+from app.models.person import SIGN_IN_BLOCKED, Person, PersonStatus
 from app.repositories.lc import refresh_person_timezone
 from app.repositories.membership import (
     _audit_actor,
-    _position_rank,
+    _position_level,
     _resolve_term_id,
+    effective_position_rank,
     end_memberships_in_other_lcs,
     end_team_rows,
+    is_current_membership,
     membership_conflict,
+    no_term_message,
     person_name_parts,
 )
 
@@ -128,9 +132,10 @@ def _check_outranks_person(
     """NotAllowedError unless the actor outranks every position the person holds or
     is about to hold (spec §3.4).
 
-    This matters for more than memberships: the AIESEC email decides who can sign in
-    as this person, so without it an MCD could point the MCP's email at an account of
-    their own. `allow_self` lets an admin fix their own name and email.
+    This matters for more than memberships: the linked EXPA id decides who signs in as
+    this person (the AIESEC email only picks the account for a first sign-in), so
+    without it an MCD could unlink or re-point an MCP's account at one of their own.
+    `allow_self` lets an admin fix their own name and email.
     """
     acting_person_ids = {m.person_id for m in actor_memberships}
     if person.id in acting_person_ids:
@@ -144,7 +149,7 @@ def _check_outranks_person(
             actor_memberships,
             target_person_id=person.id,
             target_position_key=pos.key if pos else "member",
-            target_position_rank=_position_rank(pos),
+            target_position_rank=effective_position_rank(pos),
             target_lc_id=membership.lc_id,
             adding=False,
         )
@@ -172,6 +177,7 @@ def person_row(person: Person, *, has_active_membership: bool) -> Result:
         "email": person.aiesec_email,
         "active": has_active_membership,
         "status": person.status.value.lower(),
+        "expaLinked": person.expa_id is not None,
     }
 
 
@@ -182,8 +188,7 @@ def _people_with_active_membership(
         return set()
     stmt = select(Membership.person_id).where(
         Membership.person_id.in_(person_ids),
-        Membership.start_date <= today,
-        or_(Membership.end_date.is_(None), Membership.end_date >= today),
+        is_current_membership(today),
     )
     return set(session.execute(stmt).scalars().all())
 
@@ -312,8 +317,10 @@ def update_person(
 
     new_email = person.aiesec_email
     if email is not None:
-        clean_email = clean_aiesec_email(email, allowed_domains)
-        if clean_email != person.aiesec_email.lower():
+        # The same address (any case) is not a change. Skipping validation here keeps
+        # a name edit working for someone whose stored email is on a retired domain.
+        if email.strip().lower() != person.aiesec_email.lower():
+            clean_email = clean_aiesec_email(email, allowed_domains)
             _ensure_email_free(session, clean_email, except_person_id=person.id)
             new_email = clean_email
 
@@ -348,7 +355,8 @@ def deactivate_person(
 ) -> Person:
     """Set the person INACTIVE and end their current memberships. Deletes nothing.
 
-    - `status = INACTIVE`, so they can no longer sign in (`get_current_person`).
+    - `status = INACTIVE`, so they can no longer sign in (`get_current_person`), and
+      their open sessions are revoked.
     - Each membership active today ends yesterday, so it stops giving access now. One
       that started today can't end before it began, so it ends today. Their team rows
       are cut to the same date. Each end is audit-logged.
@@ -392,6 +400,8 @@ def deactivate_person(
     old_status = person.status
     person.status = PersonStatus.INACTIVE
     session.flush()
+    # Sign them out everywhere now; without this a session would last until it expires.
+    sessions_revoked = revoke_sessions_for_person(session, person.id)
     record_audit(
         session,
         action="person.deactivate",
@@ -403,6 +413,45 @@ def deactivate_person(
             "before": {"status": old_status.value},
             "after": {"status": PersonStatus.INACTIVE.value},
             "memberships_ended": ended,
+            "sessions_revoked": sessions_revoked,
+        },
+    )
+    return person
+
+
+def unlink_expa(
+    session: Session,
+    actor_memberships: Sequence[MembershipContext],
+    person_id: int,
+    *,
+    today: date | None = None,
+) -> Person:
+    """Clear the person's EXPA link and sign them out everywhere.
+
+    The next sign-in matches by AIESEC email and links again. So to fix a wrong match,
+    correct the email first, then unlink. The audit entry says only that a link was
+    removed, never the EXPA id (spec §8.4).
+    """
+    ref_date = today or date.today()
+    person = _get_person(session, person_id)
+    if person.expa_id is None:
+        raise ValueError("This person isn't linked to EXPA.")
+    _check_outranks_person(session, actor_memberships, person, today=ref_date, allow_self=False)
+
+    person.expa_id = None
+    session.flush()
+    sessions_revoked = revoke_sessions_for_person(session, person.id)
+    record_audit(
+        session,
+        action="person.unlink_expa",
+        resource_type="person",
+        resource_id=person.id,
+        summary=f"EXPA account unlinked from person {person.id}",
+        **_audit_actor(actor_memberships),
+        diff={
+            "before": {"expaLinked": True},
+            "after": {"expaLinked": False},
+            "sessions_revoked": sessions_revoked,
         },
     )
     return person
@@ -454,7 +503,10 @@ def list_person_memberships(
     """Every membership the person has held (past, current and future), newest
     first, in the `AdminMembershipRow` shape."""
     ref_date = today or date.today()
-    _get_person(session, person_id)
+    person = _get_person(session, person_id)
+    # Same rule as `is_current_membership` (Decision 1): a deactivated person's kept
+    # future membership must not show as current once its start date arrives.
+    person_counts = person.status not in SIGN_IN_BLOCKED
     memberships = (
         session.execute(
             select(Membership)
@@ -498,7 +550,8 @@ def list_person_memberships(
                 "teamName": team_names.get(m.id),
                 "startDate": m.start_date.isoformat(),
                 "endDate": m.end_date.isoformat() if m.end_date else None,
-                "current": m.start_date <= ref_date
+                "current": person_counts
+                and m.start_date <= ref_date
                 and (m.end_date is None or m.end_date >= ref_date),
             }
         )
@@ -507,7 +560,7 @@ def list_person_memberships(
 
 def _level_problem(pos: Position, lc: LC) -> str | None:
     """Spec §3.6: a position's level must equal its LC's type."""
-    if position_level(pos.key) != lc.type.value.lower():
+    if _position_level(pos) != lc.type.value.lower():
         kind = "the MC" if lc.type.value == "MC" else "an LC"
         return f"{pos.label} can't be used in {kind}."
     return None
@@ -538,7 +591,7 @@ def assign_membership(
 
     This is also how a transfer works: assigning someone to a different LC ends their
     memberships in other LCs the day before the new one starts (§5.1, §3.6). Returns
-    `{"status": "created", "membershipId": ...}` or `{"status": "rejected", ...}`.
+    `{"status": "ok", "membershipId": ...}` or `{"status": "rejected", ...}`.
     """
     person = _get_person(session, person_id)
     if person.status == PersonStatus.INACTIVE:
@@ -566,7 +619,7 @@ def assign_membership(
         actor_memberships,
         target_person_id=person.id,
         target_position_key=pos.key,
-        target_position_rank=_position_rank(pos),
+        target_position_rank=effective_position_rank(pos),
         target_lc_id=lc.id,
         adding=True,
     )
@@ -584,7 +637,7 @@ def assign_membership(
 
     resolved_term_id = _resolve_term_id(session, term_id, start_date)
     if resolved_term_id is None:
-        return _rejected("No term covers that start date.")
+        return _rejected(no_term_message(session, term_id))
 
     conflict = membership_conflict(
         session,
@@ -593,6 +646,7 @@ def assign_membership(
         function_id=fn.id if fn else None,
         start_date=start_date,
         end_date=end_date,
+        detailed=True,
     )
     if conflict is not None:
         return _rejected(conflict)
@@ -650,7 +704,7 @@ def assign_membership(
     )
     # Timezone follows the person's most recent membership (spec §4.1).
     refresh_person_timezone(session, person_id=person.id, as_of=start_date)
-    return {"status": "created", "membershipId": str(membership.id)}
+    return {"status": "ok", "membershipId": str(membership.id)}
 
 
 @dataclass(frozen=True)
@@ -705,12 +759,19 @@ def correct_membership(
     if lc is None or old_pos is None:
         return _rejected("Membership not found.")
 
+    # Deactivating ended this person's memberships on purpose. Correcting dates could
+    # silently bring one back, so a deactivated person must be reactivated first. (End
+    # has no such check: ending a membership can only shorten it, which is harmless.)
+    owner = session.get(Person, m.person_id)
+    if owner is not None and owner.status == PersonStatus.INACTIVE:
+        return _rejected("Reactivate this person before assigning a membership.")
+
     # The hierarchy rule on the membership as it is now (§3.4)...
     allowed, reason = can_admin_manage_membership(
         actor_memberships,
         target_person_id=m.person_id,
         target_position_key=old_pos.key,
-        target_position_rank=_position_rank(old_pos),
+        target_position_rank=effective_position_rank(old_pos),
         target_lc_id=m.lc_id,
         adding=False,
     )
@@ -728,7 +789,7 @@ def correct_membership(
             actor_memberships,
             target_person_id=m.person_id,
             target_position_key=new_pos.key,
-            target_position_rank=_position_rank(new_pos),
+            target_position_rank=effective_position_rank(new_pos),
             target_lc_id=m.lc_id,
             adding=False,
         )
@@ -774,6 +835,24 @@ def correct_membership(
             return _rejected("No term covers that start date.")
         new_term_id = resolved
 
+    # Moving the start later pulls the earlier team rows forward with it, so a team
+    # row never begins before its membership. A row that already ended before the
+    # new start would be left with nothing, so the whole correction is refused.
+    team_rows_to_move: list[TeamMember] = []
+    if new_start > m.start_date:
+        team_rows_to_move = list(
+            session.execute(
+                select(TeamMember).where(
+                    TeamMember.membership_id == m.id, TeamMember.start_date < new_start
+                )
+            ).scalars()
+        )
+        if any(row.end_date is not None and row.end_date < new_start for row in team_rows_to_move):
+            return _rejected(
+                "A team row of this membership ended before that start date. Choose an "
+                "earlier start date, or end this membership and assign a new one."
+            )
+
     if new_start != m.start_date or new_end != m.end_date:
         if _overlaps_other_lc(session, m, new_start, new_end):
             return _rejected(
@@ -788,6 +867,7 @@ def correct_membership(
         function_id=new_function_id,
         start_date=new_start,
         end_date=new_end,
+        detailed=True,
         ignore_membership_id=m.id,
     )
     if conflict is not None:
@@ -815,6 +895,8 @@ def correct_membership(
     m.start_date = new_start
     m.end_date = new_end
     m.term_id = new_term_id
+    for row in team_rows_to_move:
+        row.start_date = new_start
     if old_end is None or new_end < old_end:
         end_team_rows(session, membership_id=m.id, end_date=new_end)
     session.flush()
@@ -847,7 +929,7 @@ def end_membership(
         actor_memberships,
         target_person_id=m.person_id,
         target_position_key=pos.key if pos else "member",
-        target_position_rank=_position_rank(pos),
+        target_position_rank=effective_position_rank(pos),
         target_lc_id=m.lc_id,
         adding=False,
     )

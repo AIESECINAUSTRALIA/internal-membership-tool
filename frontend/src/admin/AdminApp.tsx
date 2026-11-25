@@ -10,6 +10,7 @@ import { AdminAuditingPage } from './pages/AdminAuditingPage'
 import { AdminLcsPage } from './pages/AdminLcsPage'
 import { AdminMembershipsPage } from './pages/AdminMembershipsPage'
 import { AdminPeoplePage } from './pages/AdminPeoplePage'
+import { AdminPositionsFunctionsPage } from './pages/AdminPositionsFunctionsPage'
 
 const notAvailable = (
   <PageMessage title="Page not available">You don&rsquo;t have access to this screen.</PageMessage>
@@ -42,6 +43,9 @@ export function AdminApp() {
           </Route>
           <Route element={<RequirePermission resource="membership" action="manage" fallback={notAvailable} />}>
             <Route path="memberships" element={<AdminMembershipsPage />} />
+          </Route>
+          <Route element={<RequirePermission resource="position" action="manage" fallback={notAvailable} />}>
+            <Route path="positions-functions" element={<AdminPositionsFunctionsPage />} />
           </Route>
           <Route element={<RequirePermission resource="attribute" action="manage" fallback={notAvailable} />}>
             <Route path="attributes" element={<AdminAttributesPage />} />

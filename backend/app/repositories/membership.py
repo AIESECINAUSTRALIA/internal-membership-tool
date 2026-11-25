@@ -11,14 +11,15 @@ drift out of sync.
 
 from collections.abc import Sequence
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import or_, select
+from sqlalchemy import ColumnElement, exists, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import record_audit
 from app.core.permissions import (
     POSITION_RANKS,
+    PRESIDENTIAL_POSITIONS,
     MembershipContext,
     can_add_member,
     can_extend_term,
@@ -31,8 +32,37 @@ from app.core.permissions import (
 )
 from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, Position, Term
-from app.models.person import Person, PersonStatus
+from app.models.person import SIGN_IN_BLOCKED, Person, PersonStatus
 from app.repositories.lc import refresh_person_timezone
+
+
+def is_current_membership(ref_date: date) -> ColumnElement[bool]:
+    """SQL condition: this membership counts as a current one on `ref_date`.
+
+    Two things must both be true:
+    - the dates cover the day (`start_date <= ref_date`, and the end date is empty
+      or not before `ref_date`), and
+    - the person can still sign in (their status is not in `SIGN_IN_BLOCKED`).
+
+    The second part matters because deactivating someone ends the memberships that
+    are running *today* but keeps future ones (so reactivating restores them). Without
+    it, a kept future membership would start counting the day it begins, and the
+    deactivated person would reappear as a member. ALUMNUS is not blocked, so an
+    alumnus with a current membership still counts.
+
+    There is no `Membership.person` relationship, hence the `exists()` subquery.
+    """
+    person_can_sign_in = exists(
+        select(Person.id).where(
+            Person.id == Membership.person_id,
+            Person.status.not_in(SIGN_IN_BLOCKED),
+        )
+    )
+    return (
+        (Membership.start_date <= ref_date)
+        & or_(Membership.end_date.is_(None), Membership.end_date >= ref_date)
+        & person_can_sign_in
+    )
 
 
 def get_active_memberships_for_person(
@@ -48,16 +78,45 @@ def get_active_memberships_for_person(
     ref_date = as_of if as_of is not None else date.today()
     stmt = select(Membership).where(
         Membership.person_id == person_id,
-        Membership.start_date <= ref_date,
-        or_(Membership.end_date.is_(None), Membership.end_date >= ref_date),
+        is_current_membership(ref_date),
     )
     return session.execute(stmt).scalars().all()
 
 
-def _position_rank(pos: Position | None) -> int:
-    """`position.rank` when populated, else the spec §2 fallback by key."""
+# The three helpers below read a position's settings from the `position` table,
+# which admins edit on the Positions & functions screen (DEV-0049). Each falls back
+# to the hardcoded spec §2 values (by key) only while the column is still empty,
+# e.g. on a database that hasn't run migration b4e81d2c9a07 yet.
+
+
+def effective_position_rank(pos: Position | None) -> int:
+    """`position.rank` when set, else the spec §2 fallback by key.
+
+    Checked with `is not None` (not `or`) so a rank of 0 is used as-is.
+    """
+    if pos is not None and pos.rank is not None:
+        return pos.rank
     pos_key = pos.key if pos else "member"
-    return getattr(pos, "rank", None) or POSITION_RANKS.get(pos_key, 1)
+    return POSITION_RANKS.get(pos_key, 1)
+
+
+def _position_can_add_same_rank(pos: Position | None) -> bool:
+    """The president exception (spec §3.4): `position.can_add_same_rank` when set,
+    else true only for the presidential keys."""
+    if pos is not None and pos.can_add_same_rank is not None:
+        return pos.can_add_same_rank
+    pos_key = pos.key if pos else "member"
+    return pos_key in PRESIDENTIAL_POSITIONS
+
+
+def _position_level(pos: Position) -> Literal["lc", "mc"]:
+    """Whether the position belongs to an LC or the MC (spec §3.6):
+    `position.level` when set, else decided by key."""
+    if pos.level == "lc":
+        return "lc"
+    if pos.level == "mc":
+        return "mc"
+    return position_level(pos.key)
 
 
 def person_name_parts(person: Person) -> tuple[str, str]:
@@ -88,8 +147,8 @@ def position_payload(pos: Position | None, lc: LC | None) -> dict[str, Any]:
         "key": pos_key,
         "label": pos.label if pos else pos_key,
         "level": "mc" if is_mc else "lc",
-        "rank": _position_rank(pos),
-        "canAddSameRank": getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"}),
+        "rank": effective_position_rank(pos),
+        "canAddSameRank": _position_can_add_same_rank(pos),
         "presidential": pos_key in {"lcp", "mcp"},
         "homeChartScope": home_chart_scope(pos_key),
         "holdsTeam": pos_key in {"member", "team_leader"},
@@ -108,12 +167,15 @@ def _audit_actor(actor_memberships: Sequence[MembershipContext]) -> dict[str, in
 def _resolve_term_id(session: Session, term_id: int | None, start_date: date) -> int | None:
     """The term a new membership belongs to, or None if there isn't a valid one.
 
-    An explicit `term_id` must exist; otherwise the term covering `start_date`
+    An explicit `term_id` must exist and cover `start_date` (callers turn None into
+    a message with `no_term_message`); otherwise the term covering `start_date`
     (the latest-starting one if several overlap; the newest-created one if
     they also start on the same day, so the choice is never arbitrary).
     """
     if term_id is not None:
-        return term_id if session.get(Term, term_id) else None
+        term = session.get(Term, term_id)
+        covers = term is not None and term.start_date <= start_date <= term.end_date
+        return term_id if covers else None
     stmt = (
         select(Term.id)
         .where(Term.start_date <= start_date, Term.end_date >= start_date)
@@ -121,6 +183,14 @@ def _resolve_term_id(session: Session, term_id: int | None, start_date: date) ->
         .limit(1)
     )
     return session.execute(stmt).scalar_one_or_none()
+
+
+def no_term_message(session: Session, term_id: int | None) -> str:
+    """The rejection text for when `_resolve_term_id` finds no term."""
+    # A term that exists but doesn't cover the start date gets its own wording.
+    if term_id is not None and session.get(Term, term_id) is not None:
+        return "The start date isn't inside the chosen term."
+    return "No term covers that start date."
 
 
 def membership_conflict(
@@ -131,17 +201,24 @@ def membership_conflict(
     function_id: int | None,
     start_date: date,
     end_date: date,
+    detailed: bool,
     ignore_membership_id: int | None = None,
 ) -> str | None:
     """Why `person_id` can't hold a membership in `lc` for these dates, or None.
 
     Shared by the Membership summary's Add member and the Admin console, so both
-    apply the same two rules:
+    apply the same rules:
 
     - Spec §3.6: no LC membership while an MC membership overlaps the dates. The
       message is generic on purpose and does not say why.
     - Spec §5.1: the same function can't be held twice in one LC with overlapping
       dates.
+    - A new membership is refused while the person has one in a different LC that
+      overlaps its dates and starts on or after its start date: the transfer rule
+      would otherwise have to end a membership that hasn't begun. `detailed` picks
+      the message: an admin (who can see every LC) is told which LC and date; an
+      LC-scoped user gets a vague one, so they can't learn about another LC's
+      records.
 
     `ignore_membership_id` leaves out the membership being corrected, so it isn't
     compared with itself.
@@ -163,6 +240,18 @@ def membership_conflict(
             if m_lc and m_lc.type.value == "MC" and overlaps(m):
                 return "This person can't be added. Contact your MC."
 
+    for m in theirs:
+        if m.lc_id != lc.id and m.start_date >= start_date and overlaps(m):
+            if not detailed:
+                return "This person already has a membership coming up elsewhere. Contact your MC."
+            other_lc = session.get(LC, m.lc_id)
+            lc_name = other_lc.name if other_lc else "another LC"
+            return (
+                f"This person's membership in {lc_name} starts on "
+                f"{m.start_date.strftime('%d %b %Y')}. "
+                "Correct it first, or end this one before that date."
+            )
+
     if function_id is not None:
         for m in theirs:
             if m.lc_id == lc.id and m.function_id == function_id and overlaps(m):
@@ -182,8 +271,7 @@ def end_memberships_in_other_lcs(
     """Transfer rule (spec §5.1, §3.6): a new membership in `lc_id` ends the person's
     memberships in every other LC on the day before it starts.
 
-    A membership that started on or after that day can't end before it began, so it
-    ends on its own start date instead. Each one gets its own audit entry (§8.4).
+    Each one gets its own audit entry (§8.4), and its open team rows end with it.
     """
     theirs = (
         session.execute(
@@ -201,9 +289,13 @@ def end_memberships_in_other_lcs(
     day_before = start_date - timedelta(days=1)
     for old_m in theirs:
         old_end = old_m.end_date
-        new_end = day_before if day_before >= old_m.start_date else old_m.start_date
+        # `membership_conflict` runs first and refuses any membership in another LC
+        # that starts on or after `start_date`, so `day_before >= old_m.start_date`
+        # always holds here and no "end before it began" case is needed.
+        new_end = day_before
         old_m.end_date = new_end
         session.flush()
+        end_team_rows(session, membership_id=old_m.id, end_date=new_end)
 
         record_audit(
             session,
@@ -238,8 +330,8 @@ def build_membership_context(session: Session, membership: Membership) -> Member
     """Build a MembershipContext helper for permission evaluations."""
     pos = session.get(Position, membership.position_id)
     pos_key = pos.key if pos else "member"
-    rank = _position_rank(pos)
-    can_add_same_rank = getattr(pos, "can_add_same_rank", False) or (pos_key in {"lcp", "mcp"})
+    rank = effective_position_rank(pos)
+    can_add_same_rank = _position_can_add_same_rank(pos)
 
     lc = session.get(LC, membership.lc_id)
     lc_type = lc.type.value if lc and hasattr(lc.type, "value") else "LC"
@@ -306,10 +398,7 @@ def list_members_summary(
         allowed_lc_ids = {m.lc_id for m in actor_memberships}
 
     # Fetch active memberships
-    stmt = select(Membership).where(
-        Membership.start_date <= ref_date,
-        or_(Membership.end_date.is_(None), Membership.end_date >= ref_date),
-    )
+    stmt = select(Membership).where(is_current_membership(ref_date))
     if allowed_lc_ids is not None:
         stmt = stmt.where(Membership.lc_id.in_(allowed_lc_ids))
     if filter_lc_id is not None:
@@ -469,6 +558,10 @@ def add_member(
     pos = session.execute(select(Position).where(Position.key == position_key)).scalar_one_or_none()
     if not pos:
         return {"status": "rejected", "message": "Position not found."}
+    # An inactive position stays on existing memberships but is never given out
+    # again (spec §1.5). Same rule as inactive LCs above.
+    if not pos.active:
+        return {"status": "rejected", "message": "That position is inactive."}
 
     func = None
     if function_key:
@@ -477,6 +570,8 @@ def add_member(
         ).scalar_one_or_none()
         if func is None:
             return {"status": "rejected", "message": "Function not found."}
+        if not func.active:
+            return {"status": "rejected", "message": "That function is inactive."}
 
     # Authorise before touching the person table: a denied actor must not be able
     # to probe which emails exist (via `confirm_existing`). Spec §3.4, §3.6.
@@ -485,8 +580,8 @@ def add_member(
         target_lc_id=lc.id,
         target_lc_type=lc.type.value,
         target_position_key=pos.key,
-        target_position_rank=_position_rank(pos),
-        target_position_level=position_level(pos.key),
+        target_position_rank=effective_position_rank(pos),
+        target_position_level=_position_level(pos),
         target_function_id=func.id if func else None,
         target_team_id=team_id,
     )
@@ -501,7 +596,7 @@ def add_member(
 
     resolved_term_id = _resolve_term_id(session, term_id, start_date)
     if resolved_term_id is None:
-        return {"status": "rejected", "message": "No term covers that start date."}
+        return {"status": "rejected", "message": no_term_message(session, term_id)}
 
     clean_email = email.strip().lower()
 
@@ -530,6 +625,7 @@ def add_member(
             function_id=func.id if func else None,
             start_date=start_date,
             end_date=end_date,
+            detailed=False,
         )
         if conflict is not None:
             return {"status": "rejected", "message": conflict}

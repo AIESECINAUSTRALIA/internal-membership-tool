@@ -23,6 +23,10 @@
  *   GET  /api/v1/me/custom-fields          → getMyCustomFields
  *   PATCH /api/v1/me/custom-fields         → updateMyCustomFields
  *   GET  /api/v1/me/memberships            → getMyMembershipHistory
+ *   GET/POST /api/v1/people, PATCH /people/:id, POST /people/:id/(de|re)activate
+ *                                          → listPeopleAdmin, createPerson, updatePerson, …
+ *   GET/POST /api/v1/people/:id/memberships → listPersonMemberships, assignMembership
+ *   PATCH /api/v1/memberships/:id, POST …/end → correctMembership, endMembership
  */
 
 import type {
@@ -42,6 +46,12 @@ import type {
   MembershipDetail,
   Page,
   MemberSummaryRow,
+  AdminPersonRow,
+  AdminPersonInput,
+  AdminPersonQuery,
+  AdminMembershipRow,
+  AssignMembershipInput,
+  CorrectMembershipInput,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -136,11 +146,20 @@ function createTransport(options: HttpApiOptions): Transport {
 }
 
 /** What the user sees when a change could not be saved, by HTTP status. */
-function failureMessage(error: unknown): string {
+function failureMessage(error: unknown, notFound?: string): string {
   const status = error instanceof HttpError ? error.status : null
   if (status === 401) return 'Your session has expired. Sign in again.'
-  if (status === 403) return "You don't have permission to do that."
-  if (status === 404) return 'That membership no longer exists. Refresh the page.'
+  // A 403 may carry its own reason (e.g. "You can't do this to your own record."), so
+  // show that when there is one; otherwise the generic text.
+  if (status === 403) {
+    return error instanceof HttpError && error.detail ? error.detail : "You don't have permission to do that."
+  }
+  if (status === 404) return notFound ?? 'That membership no longer exists. Refresh the page.'
+  // 400 and 409 carry a sentence written for the admin (e.g. "Someone already has
+  // that email address."), so show it as it is.
+  if ((status === 400 || status === 409) && error instanceof HttpError && error.detail) {
+    return error.detail
+  }
   return 'Something went wrong. Try again.'
 }
 
@@ -150,17 +169,33 @@ function failureMessage(error: unknown): string {
  * Reads (listMembers, getMembershipDetail, getReferenceData) still throw, and the
  * pages show their own error state.
  */
-async function action<T>(send: () => Promise<T>): Promise<T | { status: 'rejected'; message: string }> {
+async function action<T>(
+  send: () => Promise<T>,
+  notFound?: string,
+): Promise<T | { status: 'rejected'; message: string }> {
   try {
     return await send()
   } catch (error) {
-    return { status: 'rejected', message: failureMessage(error) }
+    return { status: 'rejected', message: failureMessage(error, notFound) }
   }
 }
 
 /** A membership id, made safe to put in a URL path. */
 function idPath(membershipId: string): string {
   return `/api/v1/members/${encodeURIComponent(membershipId)}`
+}
+
+/** The 404 text for the people methods (the default text is about memberships). */
+const PERSON_NOT_FOUND = 'That person no longer exists. Refresh the page.'
+
+/** Turns a write's answer into an `ActionResult`. A person row (the people endpoints
+ * answer with the saved person) or `{status: 'ok'}` is a success. */
+function toActionResult(result: { status?: string; message?: string }): ActionResult {
+  if (result.status === 'rejected') {
+    return { status: 'rejected', message: result.message ?? 'Unknown error' }
+  }
+  // A failed `action()` is already `rejected`, handled above. Anything else saved.
+  return { status: 'ok' }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +292,86 @@ export function createHttpApi(options: HttpApiOptions): Api {
       )
       if (result.status === 'ok') return { status: 'ok' }
       return { status: 'rejected', message: result.message ?? 'Unknown error' }
+    },
+
+    // -------------------------------------------------------------------
+    // Admin console: People and Memberships — REAL backend (DEV-47)
+    // -------------------------------------------------------------------
+
+    async listPeopleAdmin(query: AdminPersonQuery): Promise<Page<AdminPersonRow>> {
+      const params = new URLSearchParams({
+        search: query.search,
+        page: String(query.page),
+        pageSize: String(query.pageSize),
+      })
+      return http.get<Page<AdminPersonRow>>(`/api/v1/people?${params.toString()}`)
+    },
+
+    async createPerson(input: AdminPersonInput): Promise<ActionResult> {
+      const result = await action(() => http.post<AdminPersonRow>('/api/v1/people', input), PERSON_NOT_FOUND)
+      return toActionResult(result)
+    },
+
+    async updatePerson(personId: string, changes: Partial<AdminPersonInput>): Promise<ActionResult> {
+      const id = toDbId(personId)
+      if (id === null) return STALE_FORM
+      const result = await action(() => http.patch<AdminPersonRow>(`/api/v1/people/${id}`, changes), PERSON_NOT_FOUND)
+      return toActionResult(result)
+    },
+
+    async deactivatePerson(personId: string): Promise<ActionResult> {
+      const id = toDbId(personId)
+      if (id === null) return STALE_FORM
+      const result = await action(() => http.post<AdminPersonRow>(`/api/v1/people/${id}/deactivate`, {}), PERSON_NOT_FOUND)
+      return toActionResult(result)
+    },
+
+    async unlinkExpa(personId: string): Promise<ActionResult> {
+      const id = toDbId(personId)
+      if (id === null) return STALE_FORM
+      const result = await action(() => http.post<AdminPersonRow>(`/api/v1/people/${id}/unlink-expa`, {}), PERSON_NOT_FOUND)
+      return toActionResult(result)
+    },
+
+    async reactivatePerson(personId: string): Promise<ActionResult> {
+      const id = toDbId(personId)
+      if (id === null) return STALE_FORM
+      const result = await action(() => http.post<AdminPersonRow>(`/api/v1/people/${id}/reactivate`, {}), PERSON_NOT_FOUND)
+      return toActionResult(result)
+    },
+
+    async listPersonMemberships(personId: string): Promise<AdminMembershipRow[]> {
+      return http.get<AdminMembershipRow[]>(`/api/v1/people/${encodeURIComponent(personId)}/memberships`)
+    },
+
+    async assignMembership(personId: string, input: AssignMembershipInput): Promise<ActionResult> {
+      const id = toDbId(personId)
+      const lcId = toDbId(input.lcId)
+      if (id === null || lcId === null) return STALE_FORM
+      const body = { ...input, lcId }
+      const result = await action(
+        () => http.post<{ status: string; message?: string }>(`/api/v1/people/${id}/memberships`, body),
+        PERSON_NOT_FOUND,
+      )
+      return toActionResult(result)
+    },
+
+    async correctMembership(membershipId: string, changes: CorrectMembershipInput): Promise<ActionResult> {
+      const id = toDbId(membershipId)
+      if (id === null) return STALE_FORM
+      const result = await action(() =>
+        http.patch<{ status: string; message?: string }>(`/api/v1/memberships/${id}`, changes),
+      )
+      return toActionResult(result)
+    },
+
+    async endMembership(membershipId: string, endDate: IsoDate): Promise<ActionResult> {
+      const id = toDbId(membershipId)
+      if (id === null) return STALE_FORM
+      const result = await action(() =>
+        http.post<{ status: string; message?: string }>(`/api/v1/memberships/${id}/end`, { endDate }),
+      )
+      return toActionResult(result)
     },
 
     // -------------------------------------------------------------------

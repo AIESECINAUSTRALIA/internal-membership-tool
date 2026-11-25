@@ -30,7 +30,7 @@ from app.models.membership import Membership, Team, TeamMember
 from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
-from tests.helpers import make_state_timezone
+from tests.helpers import api_client_options, make_state_timezone, make_term
 
 # ---------------------------------------------------------------------------
 # Test Fixtures
@@ -200,7 +200,7 @@ def client_with_actor(
     # Default actor is LCVP
     app.dependency_overrides[get_current_actor] = lambda: actor_map["lcvp"]
 
-    with TestClient(app) as test_client:
+    with TestClient(app, **api_client_options()) as test_client:
         yield test_client, actor_map, seed
 
     app.dependency_overrides.clear()
@@ -321,6 +321,40 @@ def test_move_to_team_denied_for_team_leader(
     assert resp.json()["status"] == "rejected"
 
 
+def test_add_member_refuses_a_term_that_does_not_cover_the_start(
+    client_with_actor: Fixture,
+    db_session: Session,
+) -> None:
+    client, actor_map, seed = client_with_actor
+    app.dependency_overrides[get_current_actor] = lambda: actor_map["lcvp"]
+    today = date.today()
+    old_term = make_term(
+        db_session,
+        name="test-old-term",
+        start=today - timedelta(days=400),
+        end=today - timedelta(days=300),
+    )
+    resp = client.post(
+        "/api/v1/members",
+        json={
+            "email": "test-new-person@aiesec.net",
+            "firstName": "New",
+            "lastName": "Person",
+            "lcId": seed.lc_usyd.id,
+            "positionKey": "member",
+            "functionKey": "ogv",
+            "termId": old_term.id,
+            "startDate": str(today),
+            "endDate": str(today + timedelta(days=90)),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "status": "rejected",
+        "message": "The start date isn't inside the chosen term.",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Test: Transfer Between LCs (Spec §5.1)
 # ---------------------------------------------------------------------------
@@ -437,6 +471,47 @@ def _create_audit_count(db_session: Session) -> int:
     )
 
 
+def test_add_member_refused_vaguely_when_another_lc_membership_has_not_started(
+    client_with_actor: Fixture,
+    db_session: Session,
+) -> None:
+    client, actor_map, seed = client_with_actor
+    app.dependency_overrides[get_current_actor] = lambda: actor_map["lcvp"]
+    # The person's MU membership hasn't started yet when the new USYD one begins.
+    db_session.add(
+        Membership(
+            person_id=seed.p_member_mu.id,
+            lc_id=seed.lc_mu.id,
+            position_id=seed.pos_member.id,
+            function_id=seed.fn_bnm.id,
+            term_id=seed.term.id,
+            start_date=date(2026, 9, 1),
+            end_date=date(2026, 12, 31),
+        )
+    )
+    db_session.flush()
+    before = _create_audit_count(db_session)
+
+    resp = client.post(
+        "/api/v1/members",
+        json=_add_payload(
+            seed,
+            email=seed.p_member_mu.aiesec_email,
+            confirmedExisting=True,
+            startDate="2026-07-01",
+        ),
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "rejected"
+    assert body["message"] == (
+        "This person already has a membership coming up elsewhere. Contact your MC."
+    )
+    assert "test-mu" not in body["message"]
+    assert _create_audit_count(db_session) == before
+
+
 def test_add_member_denied_for_plain_member(
     client_with_actor: Fixture, db_session: Session
 ) -> None:
@@ -536,6 +611,32 @@ def test_add_member_rejects_inactive_lc(client_with_actor: Fixture, db_session: 
     resp = client.post("/api/v1/members", json=_add_payload(seed))
 
     assert resp.json() == {"status": "rejected", "message": "That LC is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_rejects_inactive_position(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.pos_member.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That position is inactive."}
+    assert _create_audit_count(db_session) == 0
+
+
+def test_add_member_rejects_inactive_function(
+    client_with_actor: Fixture, db_session: Session
+) -> None:
+    client, _, seed = client_with_actor
+    seed.fn_ogv.active = False
+    db_session.flush()
+
+    resp = client.post("/api/v1/members", json=_add_payload(seed))
+
+    assert resp.json() == {"status": "rejected", "message": "That function is inactive."}
     assert _create_audit_count(db_session) == 0
 
 

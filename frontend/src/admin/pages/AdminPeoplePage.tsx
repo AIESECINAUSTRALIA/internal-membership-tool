@@ -28,9 +28,9 @@ import { useAuth } from '../../auth/authContext'
 import { can } from '../../auth/permissions'
 import { fullName } from '../../lib/labels'
 import { useDebounced } from '../../lib/useDebounced'
-import { AddPersonDialog, EditPersonDialog, SetPersonActiveDialog } from '../PeopleDialogs'
+import { AddPersonDialog, EditPersonDialog, SetPersonActiveDialog, UnlinkExpaDialog } from '../PeopleDialogs'
 
-type PersonAction = 'edit' | 'memberships' | 'deactivate' | 'reactivate'
+type PersonAction = 'edit' | 'memberships' | 'deactivate' | 'reactivate' | 'unlink'
 
 /** The per-row "..." menu. A deactivated person can only be edited or reactivated. */
 function PersonActionsMenu({
@@ -60,6 +60,7 @@ function PersonActionsMenu({
       <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
         <MenuItem onClick={() => choose('edit')}>Edit</MenuItem>
         {canManageMemberships && <MenuItem onClick={() => choose('memberships')}>Manage memberships</MenuItem>}
+        {person.expaLinked && <MenuItem onClick={() => choose('unlink')}>Unlink EXPA</MenuItem>}
         {deactivated ? (
           <MenuItem onClick={() => choose('reactivate')}>Reactivate</MenuItem>
         ) : (
@@ -163,13 +164,14 @@ export function AdminPeoplePage() {
               <TableCell>Last name</TableCell>
               <TableCell>Email</TableCell>
               <TableCell>Status</TableCell>
+              <TableCell>EXPA</TableCell>
               <TableCell aria-label="Actions" />
             </TableRow>
           </TableHead>
           <TableBody>
             {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5}>
+                <TableCell colSpan={6}>
                   <Typography sx={{ py: 1 }}>No data exists</Typography>
                 </TableCell>
               </TableRow>
@@ -182,6 +184,8 @@ export function AdminPeoplePage() {
                 <TableCell>
                   <StatusChip person={person} />
                 </TableCell>
+                {/* Words, not just colour, so the state is clear to everyone (WCAG AA). */}
+                <TableCell>{person.expaLinked ? 'Linked' : 'Not linked'}</TableCell>
                 <TableCell align="right">
                   <PersonActionsMenu
                     person={person}
@@ -210,6 +214,9 @@ export function AdminPeoplePage() {
       {dialog?.action === 'add' && <AddPersonDialog onClose={closeDialog} onDone={reload} />}
       {dialog?.person && dialog.action === 'edit' && (
         <EditPersonDialog person={dialog.person} onClose={closeDialog} onDone={reload} />
+      )}
+      {dialog?.person && dialog.action === 'unlink' && (
+        <UnlinkExpaDialog person={dialog.person} onClose={closeDialog} onDone={reload} />
       )}
       {dialog?.person && (dialog.action === 'deactivate' || dialog.action === 'reactivate') && (
         <SetPersonActiveDialog

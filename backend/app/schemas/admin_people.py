@@ -6,7 +6,7 @@ Field names match `frontend/src/api/types.ts` (camelCase), like `schemas/members
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.schemas.membership import FunctionRef, LcRef
 
@@ -19,6 +19,8 @@ class AdminPersonRow(BaseModel):
     # Has at least one membership active today.
     active: bool
     status: Literal["active", "alumnus", "inactive"]
+    # True once they've signed in with EXPA. The id itself is never sent.
+    expaLinked: bool
 
 
 class AdminPersonPage(BaseModel):
@@ -27,6 +29,9 @@ class AdminPersonPage(BaseModel):
 
 
 class CreatePersonInput(BaseModel):
+    # Unknown fields (such as `expaId`) are a 422: the EXPA link is only made by sign-in.
+    model_config = ConfigDict(extra="forbid")
+
     firstName: str
     lastName: str
     email: str
@@ -34,6 +39,8 @@ class CreatePersonInput(BaseModel):
 
 class UpdatePersonInput(BaseModel):
     """Partial update: only fields that are present are changed."""
+
+    model_config = ConfigDict(extra="forbid")
 
     firstName: str | None = None
     lastName: str | None = None
@@ -82,6 +89,6 @@ class EndMembershipInput(BaseModel):
 
 
 class AdminActionResult(BaseModel):
-    status: Literal["ok", "created", "rejected"]
+    status: Literal["ok", "rejected"]
     message: str | None = None
     membershipId: str | None = None
