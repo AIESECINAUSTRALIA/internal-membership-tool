@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.permissions import BASELINE_PERMISSION_MATRIX
 from app.models.membership import Membership
 from app.models.org import LC, Function, LCType, Position
-from app.models.person import Person
+from app.models.person import Person, PersonStatus
 from tests.auth.helpers import sign_in_as
 from tests.helpers import make_function, make_lc, make_membership, make_person, make_term
 
@@ -209,3 +209,24 @@ def test_a_bare_email_header_does_not_sign_anyone_in(
     )
 
     assert response.status_code == 401
+
+
+def test_inactive_person_session_gets_401(client: TestClient, db_session: Session, lc: LC) -> None:
+    """A deactivated person's existing session stops working at once."""
+    person, _ = _person_in(
+        db_session,
+        email="test_flow_inactive@aiesec.net",
+        lc=lc,
+        position_key="lcvp",
+        rank=3,
+    )
+    sign_in_as(client, db_session, person)
+    assert client.get("/api/v1/me").status_code == 200
+
+    person.status = PersonStatus.INACTIVE
+    db_session.flush()
+
+    response = client.get("/api/v1/me")
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Account is unavailable"

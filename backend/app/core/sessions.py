@@ -21,7 +21,7 @@ import hashlib
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.user_session import UserSession
@@ -138,6 +138,26 @@ def revoke_session(db: Session, session: UserSession) -> None:
     """Invalidate a session immediately."""
     session.revoked_at = utc_now()
     db.commit()
+
+
+def revoke_sessions_for_person(db: Session, person_id: int) -> int:
+    """Revoke every open session of one person. Returns how many were revoked.
+
+    Used when someone is deactivated or unlinked from EXPA, so they are signed out
+    everywhere at once. Unlike `revoke_session` this only flushes: the caller's
+    transaction (the admin action's save wrapper) commits, so the revoke and the
+    change that caused it succeed or fail together.
+    """
+    result = db.execute(
+        update(UserSession)
+        .where(
+            UserSession.person_id == person_id,
+            UserSession.revoked_at.is_(None),
+        )
+        .values(revoked_at=utc_now())
+    )
+    db.flush()
+    return int(getattr(result, "rowcount", 0) or 0)
 
 
 def purge_stale_sessions(db: Session) -> int:

@@ -8,6 +8,7 @@ import { RedirectIfSignedInAdmin, RequireAdminConsole } from './guards'
 import { AdminAttributesPage } from './pages/AdminAttributesPage'
 import { AdminAuditingPage } from './pages/AdminAuditingPage'
 import { AdminLcsPage } from './pages/AdminLcsPage'
+import { AdminMembershipsPage } from './pages/AdminMembershipsPage'
 import { AdminPeoplePage } from './pages/AdminPeoplePage'
 import { AdminPositionsFunctionsPage } from './pages/AdminPositionsFunctionsPage'
 
@@ -21,8 +22,8 @@ const notAvailable = (
  * the main app's `RequireAllocated` tree in `App.tsx`. A normal user never sees a link
  * to this; reaching it means typing the address.
  *
- * Only LCs, People, Metrics & custom fields and Auditing are built (see `adminNavConfig.ts` for the rest, which
- * are ticketed separately). Each screen also needs its own `manage`/`view` grant, same
+ * Only LCs, People, Memberships, Metrics & custom fields and Auditing are built (see
+ * `adminNavConfig.ts` for the rest, which are ticketed separately). Each screen also needs its own `manage`/`view` grant, same
  * as the main app's per-route `RequirePermission`.
  */
 export function AdminApp() {
@@ -39,6 +40,9 @@ export function AdminApp() {
           </Route>
           <Route element={<RequirePermission resource="person" action="manage" fallback={notAvailable} />}>
             <Route path="people" element={<AdminPeoplePage />} />
+          </Route>
+          <Route element={<RequirePermission resource="membership" action="manage" fallback={notAvailable} />}>
+            <Route path="memberships" element={<AdminMembershipsPage />} />
           </Route>
           <Route element={<RequirePermission resource="position" action="manage" fallback={notAvailable} />}>
             <Route path="positions-functions" element={<AdminPositionsFunctionsPage />} />

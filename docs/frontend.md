@@ -220,9 +220,39 @@ Profile page is unaffected until the two are wired together.
 Swap note: the backend scopes an attribute by `function_id`, while the frontend uses
 `functionKey` like the rest of the UI, so the real client maps between the two.
 
+## Admin console: People & Memberships
+
+`/admin/people` (`admin/pages/AdminPeoplePage.tsx`, dialogs in `admin/PeopleDialogs.tsx`)
+adds, edits, deactivates and reactivates people (spec §1.5, §2A.2). Needs `manage` on
+`person`. There is no delete. Deactivate asks for confirmation and says what it does:
+the person can't sign in, their current memberships end, and nothing is deleted
+(`docs/data-model.md` → `person`). The table has an EXPA column (Linked / Not linked, in
+words); "Unlink EXPA" (linked people only) signs them out, and its confirm dialog says to
+correct a wrong email first, since the next EXPA sign-in links again by email.
+
+`/admin/memberships` (`admin/pages/AdminMembershipsPage.tsx`, dialogs in
+`admin/MembershipDialogs.tsx`) works on one person at a time. Pick them with the person
+search, or use "Manage memberships" on People. The person comes along in router state,
+so no name or email goes into the URL. Needs `manage` on `membership`.
+
+- **Assign** offers every active LC, and only the positions whose level matches it
+  (§3.6). An LC other than the person's current one makes it a transfer, and the dialog
+  warns before you confirm.
+- **Correct** fixes a mistake in position, function or dates, and sends only the fields
+  that changed.
+- **End** ends a membership early.
+
+The hierarchy rule (§3.4) isn't pre-filtered in the dialogs. The server refuses a
+position at or above the admin's own, and the dialog shows its reason.
+
+Both screens call the real backend: `api/http/httpApi.ts` sends the admin People and
+Memberships methods (including `unlinkExpa`) to `/api/v1/people` and
+`/api/v1/memberships`. The mock repeats the backend's rules for mock mode, and
+`test/adminPeople.test.tsx` covers both the rules and the screens.
+
 ## Not built yet
 
-The Admin console screens other than LCs, People, Metrics & custom fields and Auditing
+The Admin console screens other than LCs, People, Memberships, Metrics & custom fields and Auditing
 (see `admin/adminNavConfig.ts`). The MC/admin permissions table on
 the Membership page (spec §2A.5, who may view it is open, §12 #19). Anywhere real KPI data
 would appear (the homepage chart, Tracking, the Data summary/chart/report generator, and

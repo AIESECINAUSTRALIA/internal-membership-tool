@@ -18,7 +18,7 @@ from app.core.auth import AuthenticatedUser
 from app.core.sessions import get_valid_session
 from app.db.session import SessionLocal
 from app.models.membership import Membership
-from app.models.person import Person, PersonStatus
+from app.models.person import SIGN_IN_BLOCKED, Person
 from app.repositories.membership import (
     build_membership_context,
     get_active_memberships_for_person,
@@ -54,7 +54,7 @@ def get_current_user(request: Request, db: DbSession) -> AuthenticatedUser:
         raise HTTPException(status_code=401, detail="Invalid or expired session")
 
     person = db.get(Person, session.person_id)
-    if person is None or person.status == PersonStatus.ANONYMISED:
+    if person is None or person.status in SIGN_IN_BLOCKED:
         raise HTTPException(status_code=401, detail="Account is unavailable")
 
     if not person.expa_id:
@@ -72,14 +72,14 @@ CurrentUser = Annotated[AuthenticatedUser, Depends(get_current_user)]
 def get_current_person(user: CurrentUser, db: DbSession) -> Person | None:
     """The signed-in `person`, matched by their linked EXPA id (spec §9).
 
-    An ANONYMISED person never counts as a match: after a deletion request their
-    record must never sign anyone in again (spec §8).
+    An ANONYMISED or INACTIVE person never counts as a match: after a deletion
+    request or a deactivation their record must not sign anyone in (spec §8).
     """
     return (
         db.execute(
             select(Person).where(
                 Person.expa_id == user.subject,
-                Person.status != PersonStatus.ANONYMISED,
+                Person.status.not_in(SIGN_IN_BLOCKED),
             )
         )
         .scalars()

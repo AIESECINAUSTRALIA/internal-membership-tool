@@ -31,7 +31,7 @@ from app.core.sessions import (
 )
 from app.models.membership import Membership, Team
 from app.models.org import LC, Function, Position
-from app.models.person import Person, PersonStatus
+from app.models.person import SIGN_IN_BLOCKED, Person, PersonStatus
 from app.repositories.membership import get_active_memberships_for_person
 from app.repositories.team import get_current_teams_for_memberships
 from app.schemas.me import (
@@ -231,9 +231,9 @@ def callback(
         return _fail_sign_in(db, pending_token, SignInError.DOMAIN, audit=True)
 
     person = _find_person(db, identity)
-    if person is None or person.status == PersonStatus.ANONYMISED:
-        # No person id in the audit entry: there is no row, or it was anonymised
-        # and must not gain new activity linked to it.
+    if person is None or person.status in SIGN_IN_BLOCKED:
+        # No person id in the audit entry: there is no row, or it was anonymised or
+        # deactivated and must not gain new activity linked to it.
         return _fail_sign_in(db, pending_token, SignInError.NOT_ALLOCATED, audit=True)
 
     # Only ACTIVE memberships let someone in (spec §3.2): an ended term means

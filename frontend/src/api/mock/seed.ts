@@ -139,6 +139,7 @@ const mc = (positionKey: string): MatrixRow[] => [
   row(positionKey, 'admin_console', 'view', 'all'),
   row(positionKey, 'lc', 'manage', 'all'),
   row(positionKey, 'person', 'manage', 'all'),
+  row(positionKey, 'membership', 'manage', 'all'), // admin Memberships screen (DEV-47)
   row(positionKey, 'position', 'manage', 'all'), // spec §1.5, §2A.2: unified Positions & functions screen
   row(positionKey, 'attribute', 'manage', 'all'), // KPIs and custom fields (§1.5, §4.2)
   row(positionKey, 'audit_log', 'view', 'all'),
@@ -200,6 +201,10 @@ export interface DbPerson {
   lastName: string
   email: string
   customFields: Record<string, string | number | boolean | null>
+  /** `person.status`. Left out means 'active'; 'inactive' = deactivated (DEV-47). */
+  status?: 'active' | 'inactive'
+  /** Linked to an EXPA account. Left out means not linked (a person added on the console). */
+  expaLinked?: boolean
 }
 
 export interface DbMembership {
@@ -345,7 +350,9 @@ export function buildSeed(today: IsoDate): MockDb {
   // Everyone is a numbered placeholder ("Member 1", "Member 2", ...), assigned in creation
   // order. The one exception is the default demo person, who is passed an explicit name.
   let memberNumber = 0
-  const person = (id: string, override?: { firstName: string; lastName: string; email: string }) => {
+  // Everyone counts as linked (they have signed in with EXPA) unless said otherwise, so the
+  // mock sign-in personas stay linked. Some generated members are left unlinked on purpose.
+  const person = (id: string, override?: { firstName: string; lastName: string; email: string }, expaLinked = true) => {
     if (!override) memberNumber += 1
     people.push({
       id,
@@ -353,6 +360,7 @@ export function buildSeed(today: IsoDate): MockDb {
       lastName: override?.lastName ?? String(memberNumber),
       email: override?.email ?? `${id.replace(/^p-/, '')}@aiesec.example`,
       customFields: {},
+      expaLinked,
     })
   }
   const membership = (
@@ -440,7 +448,7 @@ export function buildSeed(today: IsoDate): MockDb {
   for (const group of spread) {
     for (let i = 0; i < group.count; i += 1) {
       const id = `p-gen-${n}`
-      person(id)
+      person(id, undefined, n % 2 === 1) // even numbers have not signed in yet
       membership(id, group.lcId, group.leader && i === 0 ? 'team_leader' : 'member', group.fn, group.team)
       n += 1
     }

@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from app.api.v1 import auth
 from app.core.auth import ExpaIdentity
 from app.core.sessions import hash_token
-from app.models.org import LC
-from app.models.person import Person
+from app.models.org import LC, LCType, Position
+from app.models.person import Person, PersonStatus
 from app.models.privacy import AuditLog
 from app.models.user_session import UserSession
 from tests.helpers import (
@@ -463,3 +463,129 @@ def test_unauthenticated_failures_are_not_audited(
     )
 
     assert len(_sign_in_audits(db_session)) == before
+
+
+def test_callback_refuses_inactive_person(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_expa: ExpaIdentity,
+) -> None:
+    """A deactivated person is refused even if a membership covers today."""
+    person = make_person(db_session, email=fake_expa.aiesec_email)
+    person.expa_id = fake_expa.expa_id
+    person.status = PersonStatus.INACTIVE
+    make_membership(
+        db_session,
+        person=person,
+        lc=make_lc(db_session),
+        position=make_position(db_session),
+        term=make_term(db_session),
+        start=YEAR_AGO,
+        end=None,
+    )
+    db_session.flush()
+
+    state = _start_login(client, monkeypatch)
+    response = client.get(
+        "/api/v1/auth/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+
+    _assert_sign_in_error(response, "not_allocated")
+    sessions = db_session.execute(
+        select(UserSession).where(UserSession.person_id == person.id)
+    ).scalars()
+    assert list(sessions) == []
+
+    # The callback's own SIGN_IN_BLOCKED branch refuses before it has a person id to
+    # record, so its audit row has none. (The later "no active membership" branch does
+    # record the person id, so this tells the two branches apart.)
+    entry = _sign_in_audits(db_session)[-1]
+    assert entry.actor_person_id is None
+    assert entry.diff == {"allocated": False, "reason": "not_allocated"}
+
+
+def _expa_identity_is(monkeypatch: pytest.MonkeyPatch, identity: ExpaIdentity) -> None:
+    """Make the next EXPA lookup answer as this identity."""
+    monkeypatch.setattr(
+        auth.ExpaOAuthClient,
+        "get_current_person",
+        Mock(return_value=identity),
+    )
+
+
+def test_wrong_match_fixed_by_email_correction_then_unlink(
+    client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_expa: ExpaIdentity,
+) -> None:
+    """P was linked to the wrong EXPA account (A). The admin corrects P's email to B's,
+    then unlinks. B's next sign-in links to P, and A no longer signs in as P."""
+    from datetime import date
+
+    from app.repositories import admin_people as repo
+    from app.repositories.membership import build_membership_context
+
+    person = _allocated_person(db_session)
+    person.expa_id = "A"
+    person.aiesec_email = "wrong@aiesec.net"
+
+    # An MCP (matrix grants it `manage` on memberships), ranking above P's position.
+    mcp = db_session.execute(select(Position).where(Position.key == "mcp")).scalar_one_or_none()
+    if mcp is None:
+        mcp = Position(key="mcp", label="MCP", active=True)
+        db_session.add(mcp)
+    mcp.rank = 7
+    mcp.active = True
+    admin_person = make_person(db_session, email="test-fix-admin@aiesec.net")
+    admin_membership = make_membership(
+        db_session,
+        person=admin_person,
+        lc=make_lc(db_session, name="test-fix-mc", lc_type=LCType.MC),
+        position=mcp,
+        term=make_term(db_session, name="test-fix-term"),
+        start=YEAR_AGO,
+        end=None,
+    )
+    db_session.flush()
+    actor = [build_membership_context(db_session, admin_membership)]
+
+    # Correct the email first, then unlink.
+    repo.update_person(
+        db_session,
+        actor,
+        person.id,
+        first_name=None,
+        last_name=None,
+        email="b@aiesec.net",
+        allowed_domains={"aiesec.net"},
+    )
+    assert person.expa_id == "A"  # editing the email alone changes nobody's link
+    repo.unlink_expa(db_session, actor, person.id, today=date.today())
+    assert person.expa_id is None
+
+    # B signs in: matched by email, so P is now linked to B.
+    _expa_identity_is(monkeypatch, ExpaIdentity(expa_id="B", aiesec_email="b@aiesec.net"))
+    state = _start_login(client, monkeypatch)
+    response = client.get(
+        "/api/v1/auth/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    assert "error" not in response.headers["location"]
+    db_session.refresh(person)
+    assert person.expa_id == "B"
+
+    # A signs in: no one matches, so refused.
+    _expa_identity_is(monkeypatch, ExpaIdentity(expa_id="A", aiesec_email="wrong@aiesec.net"))
+    state = _start_login(client, monkeypatch)
+    response = client.get(
+        "/api/v1/auth/callback",
+        params={"code": "test-code", "state": state},
+        follow_redirects=False,
+    )
+    _assert_sign_in_error(response, "not_allocated")

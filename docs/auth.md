@@ -131,6 +131,27 @@ immediately, revoke their rows in `user_session`.
 anonymised record even when the EXPA ID matches. The anonymisation workflow
 must also clear `person.expa_id` when that workflow is implemented.
 
+**An `INACTIVE` (deactivated) person can't sign in either, and gets a 401.** Both
+statuses are in `SIGN_IN_BLOCKED` (`backend/app/models/person.py`). The callback treats
+them as "not allocated", and `get_current_user` (`backend/app/api/deps.py`) answers an
+existing session with 401 "Account is unavailable". The status is checked on every
+request, so this takes effect even for a session that is still open.
+
+**Deactivating and unlinking both revoke the person's sessions.** The Admin console's
+*Deactivate* and *Unlink EXPA* call `revoke_sessions_for_person`
+(`backend/app/core/sessions.py`), which marks every open session revoked in the same
+transaction as the change. The person is signed out everywhere at once, instead of
+waiting up to `SESSION_TTL_HOURS`.
+
+**Unlinking and re-linking.** *Unlink EXPA* (`POST /api/v1/people/{id}/unlink-expa`) clears
+`person.expa_id` and revokes sessions. It does not stop the person being matched again:
+the next EXPA sign-in finds an unlinked person by their AIESEC email and links that
+EXPA account. So **to fix a wrong match, correct the person's email first, then unlink.**
+Unlinking first would re-link the same wrong account at the next sign-in. Editing the
+email of a linked person doesn't change who signs in, because the EXPA ID is matched
+first. The audit entry (`person.unlink_expa`) records only that the link was removed,
+never the EXPA ID. Admin guide: `docs/admin-guide/02-people-and-memberships.md`.
+
 **No allocation means no authenticated session.** The callback requires
 both a matching local person and at least one active membership. If either
 is missing, it issues no session cookie and redirects to

@@ -3,8 +3,8 @@
  * `navigation/navConfig.ts`, which a normal user never sees a link to.
  *
  * Every screen from §1.5 is listed here so the pattern for adding the next one is
- * obvious, but only LCs, People, Metrics & custom fields and Auditing are built this
- * term; the rest are `built: false` (hidden by `visibleNavItems`) until their own
+ * obvious, but only LCs, People, Memberships, Metrics & custom fields and Auditing are
+ * built this term; the rest are `built: false` (hidden by `visibleNavItems`) until their own
  * tickets land.
  *
  * KPIs and custom fields are ONE entry, not two: both are rows of the same `attribute`
@@ -35,7 +35,7 @@ export const ADMIN_NAV_ITEMS: readonly AdminNavItem[] = [
     label: 'Memberships',
     path: '/admin/memberships',
     requires: { resource: 'membership', action: 'manage' },
-    built: false,
+    built: true,
   },
   { key: 'teams', label: 'Teams', path: '/admin/teams', requires: { resource: 'team_member', action: 'manage' }, built: false },
   {

@@ -34,8 +34,8 @@ screen.
 | # | Guide | Status |
 |---|---|---|
 | 1 | [Managing LCs](01-managing-lcs.md): add, rename, set state, mark inactive, merge | Written |
-| 2 | Adding people and memberships, with start/end dates, and extending a term | Not written yet: the Memberships screen isn't built |
-| 3 | Term handover: who adds whom | Not written yet: needs the Memberships screen |
+| 2 | [Adding people and memberships](02-people-and-memberships.md), with start/end dates, and extending a term | Written (screenshots still to take) |
+| 3 | Term handover: who adds whom | Not written yet: the Memberships screen now exists |
 | 4 | Changing permissions, and the "you can't grant what you don't hold" rule | Not written yet: the Permission matrix screen isn't built |
 | 5 | [Adding or retiring a KPI, function or position](05-kpis-functions-positions.md) | Positions and functions written (screenshots still to take). The KPI part isn't written yet |
 | 6 | Processing a deletion request (the manual procedure for now) | Not written yet |
