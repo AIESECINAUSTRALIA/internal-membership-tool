@@ -24,10 +24,19 @@ class PersonStatus(enum.StrEnum):
     ANONYMISED = "ANONYMISED"
 
 
+# People in these states can never sign in, and a session they already hold stops
+# working. ALUMNUS is deliberately not here: alumni may still have access.
+SIGN_IN_BLOCKED: tuple[PersonStatus, ...] = (
+    PersonStatus.ANONYMISED,
+    PersonStatus.INACTIVE,
+)
+
+
 class Person(Base):
     __tablename__ = "person"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    expa_id: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
     full_name: Mapped[str] = mapped_column(String)
     preferred_name: Mapped[str | None] = mapped_column(String, nullable=True)
     aiesec_email: Mapped[str] = mapped_column(String, unique=True, index=True)

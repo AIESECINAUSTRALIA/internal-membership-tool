@@ -28,130 +28,285 @@ Spec: §9 (Authentication) and §2A.3 (Sign in).
 
 ## The short version
 
-- People sign in with their **AIESEC Google account** (`@aiesec.net`). There are no
-  passwords, no sign-up form and no custom auth code: **Supabase Auth** does the sign-in.
-- The backend gets a short-lived **token** from the browser on every request, checks it,
-  and matches the email to a row in `person` (`person.aiesec_email`).
-- Email matched, active membership → in. Email matched but no active membership, or no
-  match at all → the **not-allocated page**. Not an allowed domain (e.g. a personal
-  Gmail) → rejected on the sign-in page.
+- People sign in with their **EXPA account**, not directly with Google or
+  Supabase. EXPA handles authentication; our backend handles the OAuth code
+  exchange and creates its own session.
+- The backend asks EXPA GIS for `currentPerson { id aiesec_email }`. It first
+  matches `person.expa_id`, falling back to an exact, case-insensitive
+  `aiesec_email` match for an unlinked person.
+- A matched person with an active membership can sign in. An unmatched,
+  anonymised or unallocated person gets no session and is redirected to
+  `/sign-in?error=not_allocated`, which shows the spec §2A.3 message. Every
+  other failed sign-in also redirects to `/sign-in?error=<reason>`.
+- The browser gets a 12-hour, server-side session through an HttpOnly
+  `__session` cookie. EXPA tokens are discarded after the identity lookup.
 
 ## The flow
 
+```text
+Browser                    Our API (FastAPI)                 EXPA / GIS
+   |                              |                               |
+   | GET /api/v1/auth/login       |                               |
+   |----------------------------->|                               |
+   |                  create pending session + OAuth state         |
+   |<----- __oauth_pending cookie + redirect to EXPA ------------|
+   |------------------------------------------------------------->|
+   |                       EXPA sign-in                            |
+   |<---------------- redirect to /api/v1/auth/callback ----------|
+   |                              |                               |
+   | callback: code + state       |                               |
+   |----------------------------->|                               |
+   |                   validate cookie + consume state             |
+   |                              |---- exchange code ------------>|
+   |                              |<--- access token --------------|
+   |                              |---- currentPerson query ------>|
+   |                              |<--- id + aiesec_email ---------|
+   |                   match person + active membership            |
+   |                   discard EXPA token                          |
+   |                   rotate session token + write audit          |
+   |<---- __session cookie + redirect to FRONTEND_ORIGIN ----------|
+   |                              |                               |
+   | GET /api/v1/me (cookie)      |                               |
+   |----------------------------->|                               |
+   |<--- person, memberships, permissions ------------------------|
 ```
- Browser                    Google           Supabase Auth               Our API (FastAPI)
-    │  click "Sign in with Google"                 │                            │
-    │ ───────────────────────────────────────────▶ │  /auth/v1/authorize        │
-    │ ◀──────── redirect to Google ─────────────── │                            │
-    │ ──── choose aiesec.net account ──▶ │         │                            │
-    │ ◀──── back to Supabase ─────────── │ ──────▶ │  (Supabase checks Google)  │
-    │ ◀──────── redirect to /sign-in?code=… ────── │                            │
-    │  supabase-js swaps the code for a session (access token = JWT)           │
-    │                                                                           │
-    │  GET /api/v1/me   Authorization: Bearer <access token>  ───────────────▶ │
-    │                       verify signature with Supabase's public keys (JWKS) │
-    │                       check expiry, issuer, audience, email domain        │
-    │                       email → person → active memberships                 │
-    │ ◀─────────────────────── { person, memberships, permissions } ────────── │
-```
+
+The pending cookie and OAuth state are separate random values. Only their
+SHA-256 hashes are stored. Both must match before the callback can continue,
+and the state is consumed before contacting EXPA so the same callback cannot
+be replayed.
 
 Where the code lives:
 
 | Piece | File |
 |---|---|
-| Supabase client (browser) | `frontend/src/auth/supabaseClient.ts` |
-| Sign-in / sign-out / `getMe` against the backend | `frontend/src/api/supabaseSession.ts` |
-| Choosing mock or real sign-in | `frontend/src/api/index.ts` (`VITE_AUTH_MODE`) |
-| The signed-in state, reacting to session changes | `frontend/src/auth/AuthProvider.tsx` |
-| Token verification | `backend/app/core/auth.py` |
-| FastAPI dependencies (`CurrentUser`, `CurrentPerson`, `CurrentActor`, `DbSession`) | `backend/app/api/deps.py` |
-| Permissions for `/me` (`resolve_permissions`) | `backend/app/core/resolved_permissions.py` (reads the matrix in `core/permissions.py`) |
-| Sign-in audit entry | `backend/app/api/v1/auth.py` (`_record_sign_in_once`), `backend/app/core/audit.py` |
-| Production default for the sign-in mode | `frontend/src/api/authMode.ts` |
-| `GET /api/v1/me` | `backend/app/api/v1/auth.py` |
-| Settings (`SUPABASE_URL`, `ALLOWED_EMAIL_DOMAINS`) | `backend/app/config.py` |
+| OAuth login, callback, logout and `/me` | `backend/app/api/v1/auth.py` |
+| EXPA OAuth exchange and GIS identity lookup | `backend/app/core/auth.py` |
+| Pending, active and revoked sessions | `backend/app/core/sessions.py` |
+| Cookie authentication and current actor | `backend/app/api/deps.py` |
+| Session database model | `backend/app/models/user_session.py` |
+| EXPA identity on the local person | `backend/app/models/person.py` |
+| Origin validation and CORS | `backend/app/main.py` |
+| Permissions returned by `/me` | `backend/app/core/resolved_permissions.py` |
+| Sign-in audit entry | `backend/app/core/audit.py` |
+| OAuth and session configuration | `backend/app/config.py` |
+
+The frontend authentication files are deliberately not listed here. They
+still implement Supabase sign-in and will be updated under DEV-83.
 
 ## Design decisions (and why)
 
-**Supabase Auth, not our own login.** Spec §9 and `CLAUDE.md` require managed OAuth.
-Supabase handles Google, sessions and token refresh. We never see a password or a Google
-token, and there is no "users" table of our own: `person` is the only identity table.
+**EXPA OAuth, not our own password system.** EXPA authenticates the member.
+The Membership Tool never asks for or stores their EXPA password. Our backend
+only exchanges the authorization code and retrieves the identity needed to
+match the member to our database. The OAuth application must be registered
+with AIESEC, using an HTTPS callback URL.
 
-**Verify tokens with Supabase's public keys (JWKS), not a shared secret.** Supabase signs
-access tokens with a private key (ES256) and publishes the public half at
-`<SUPABASE_URL>/auth/v1/.well-known/jwks.json`. The backend downloads it (and caches it)
-and checks each token's signature. So the backend needs only `SUPABASE_URL`, and there is
-no JWT secret to leak or rotate. Only ES256 is accepted, which blocks the classic
-"algorithm confusion" trick of signing a token with the public key as an HMAC secret.
+**Why our own session instead of keeping EXPA tokens.** EXPA tells us who
+the person is; our database decides what they can access. After retrieving
+the EXPA ID and email, the backend discards the access token. The browser
+uses our own session cookie for subsequent requests. That means EXPA tokens
+do not need to be stored in local storage, sent with every API request or
+persisted in PostgreSQL. Logout can revoke our session immediately.
 
-**The backend enforces the email domain, not Google.** `ALLOWED_EMAIL_DOMAINS` (default
-`aiesec.net`, comma-separated) is checked on **every request**. The domain must match
-exactly: `x@notaiesec.net` and `x@aiesec.net.evil.com` are rejected. The frontend passes
-`hd=aiesec.net` to Google (`VITE_GOOGLE_HOSTED_DOMAIN`), but that only filters Google's
-account picker and anyone can strip it, so it is never the security check. Adding a domain
-is a config change, not a code change (spec §9 TODO: confirm the full list of domains).
+**Why the EXPA ID comes before email.** Email addresses can change. A
+stable EXPA ID is a better long-term identity key. On the first sign-in,
+an unlinked person can be matched by their AIESEC email, provided they have
+an active membership. The backend then saves `person.expa_id`. On later
+sign-ins, that ID takes precedence. An already-linked person is not
+reassigned just because EXPA reports a different email.
 
-**Email match is case-insensitive.** Both sides are lower-cased before comparing.
+**The backend enforces the email domain.** `ALLOWED_EMAIL_DOMAINS` defaults
+to `aiesec.net` and accepts comma-separated domains. The match is exact:
+`x@notaiesec.net` and `x@aiesec.net.evil.com` are not accepted. This check
+happens when EXPA returns the identity during sign-in, not through a
+frontend account-picker hint.
 
-**An `ANONYMISED` person can never sign in.** After a deletion request (spec §8) the row
-counts as "no match".
+It runs **once, at sign-in**, not on every request. Removing a domain from
+`ALLOWED_EMAIL_DOMAINS` therefore does not end sessions that already exist:
+they run out within `SESSION_TTL_HOURS` (12 by default). To cut someone off
+immediately, revoke their rows in `user_session`.
 
-**"Signed in, no access" is not an error.** `/me` answers 200 with `person: null` (no
-match) or an empty `memberships` list (term ended / not started). The frontend shows the
-not-allocated page with the spec's fixed wording.
+**An `ANONYMISED` person can never sign in.** The callback rejects an
+anonymised record even when the EXPA ID matches. The anonymisation workflow
+must also clear `person.expa_id` when that workflow is implemented.
 
-**Permissions come from the server, in the frontend's own shape.** `/me` returns every
-(resource, action, scope) the person holds: the union of the grants of all their
-**active** memberships, keeping the **widest** scope where two overlap (spec §3.2). For
-example LCVP oGV plus Team Leader BD gives `membership:edit` at `function`, not `team`.
-This is `resolve_permissions` in `backend/app/core/resolved_permissions.py`, the one
-place `/me` reads the matrix. Today the matrix is the `BASELINE_PERMISSION_MATRIX` list in
-`backend/app/core/permissions.py` (written for the membership summary API, DEV-0042).
-When it moves to a database table (spec §3.3), only `resolve_permissions`'s data source
-changes. An ended or future membership grants nothing, so access stays
-deny-by-default. The frontend only uses the list to decide what to *show*; every feature
-endpoint checks again on the server.
+**An `INACTIVE` (deactivated) person can't sign in either, and gets a 401.** Both
+statuses are in `SIGN_IN_BLOCKED` (`backend/app/models/person.py`). The callback treats
+them as "not allocated", and `get_current_user` (`backend/app/api/deps.py`) answers an
+existing session with 401 "Account is unavailable". The status is checked on every
+request, so this takes effect even for a session that is still open.
 
-**Each sign-in is written to `audit_log`** (spec §9, §8.4), with `record_audit` from
-`backend/app/core/audit.py`. The frontend calls `/me` on every page load, and a reload
-is not a sign-in. So `/me` writes an `auth.sign_in` entry only the **first time it sees a
-Supabase session**: the token's `session_id` claim stays the same across token refreshes
-and changes on each new sign-in, and it is stored in the entry's `diff`. Entries are
-permanent, so they never contain personal data: the person is referred to by id
-(`actor_person_id`), and an email that matches nobody is logged with no ids and no email.
-Two first requests at the exact same moment could both write an entry. A duplicate
-sign-in line is harmless, so there is no lock. Rejected sign-ins (wrong domain, bad
-token) are not logged.
+**Deactivating and unlinking both revoke the person's sessions.** The Admin console's
+*Deactivate* and *Unlink EXPA* call `revoke_sessions_for_person`
+(`backend/app/core/sessions.py`), which marks every open session revoked in the same
+transaction as the change. The person is signed out everywhere at once, instead of
+waiting up to `SESSION_TTL_HOURS`.
 
-**No backend sign-in stub.** Every endpoint gets the caller from the same verified token.
-Feature endpoints that act on data use `get_current_actor` / `CurrentActor` in
-`backend/app/api/deps.py` (the same names the membership summary API, DEV-0042, imports),
-which return 401 when the email matches no person. A development stub that trusted an
-`X-Actor-Email` header (in the DEV-0042 branch) must not come back; a test checks the
-header alone gets a 401.
+**Unlinking and re-linking.** *Unlink EXPA* (`POST /api/v1/people/{id}/unlink-expa`) clears
+`person.expa_id` and revokes sessions. It does not stop the person being matched again:
+the next EXPA sign-in finds an unlinked person by their AIESEC email and links that
+EXPA account. So **to fix a wrong match, correct the person's email first, then unlink.**
+Unlinking first would re-link the same wrong account at the next sign-in. Editing the
+email of a linked person doesn't change who signs in, because the EXPA ID is matched
+first. The audit entry (`person.unlink_expa`) records only that the link was removed,
+never the EXPA ID. Admin guide: `docs/admin-guide/02-people-and-memberships.md`.
 
-**How the frontend's data calls are signed (DEV-0043).** In `supabase` mode the real data
-calls (`frontend/src/api/http/httpApi.ts`: the membership summary methods and
-`GET /api/v1/reference/membership-options`) send the Supabase access token as
-`Authorization: Bearer …`, read fresh from the session before every request
-(`bearerFrom` in `api/supabaseSession.ts`). `httpApi.ts` itself knows nothing about
-Supabase: it takes a `getAuthHeaders()` function, so the EXPA cookie session can pass `{}`
-later without changing it. In `mock` mode the frontend never calls the backend, because the
-backend has no way to trust a mock persona.
+**No allocation means no authenticated session.** The callback requires
+both a matching local person and at least one active membership. If either
+is missing, it issues no session cookie and redirects to
+`/sign-in?error=not_allocated`. This is different from the old Supabase
+flow, where `/me` could return a successful response with `person: null`.
+It lands on the sign-in page rather than `/not-allocated` because that
+page's route guard needs a signed-in user.
 
-`GET /api/v1/reference/membership-options` needs a caller who matches one of our people
-(`CurrentActor`): any aiesec.net account worldwide can sign in, so an account that isn't
-ours must not see our teams or their leaders' names. Signing in never depends on it:
-`getMe` takes positions from the mock (`getPositions` in `index.ts`), so an unallocated
-person still reaches the not-allocated page.
+**A failed callback always ends on a frontend page.** The callback is a page
+the browser visits, not an API call, so it never answers with JSON. Each
+failure redirects to `{FRONTEND_ORIGIN}/sign-in?error=<reason>`, and
+`SignInPage` shows a message for it:
 
-**Session expiry.** Supabase refreshes the token in the background. If refreshing fails or
-the backend answers 401, the frontend signs out locally and the guards send the person to
-`/sign-in`. There is no separate "session expired" page (spec §9).
+| `error=` | Meaning |
+|---|---|
+| `denied` | The person cancelled on EXPA's page |
+| `expired` | Missing, wrong or already-used state or pending cookie |
+| `expa` | EXPA could not be reached, or answered badly |
+| `domain` | The EXPA email is not in `ALLOWED_EMAIL_DOMAINS` |
+| `not_allocated` | No matching person, anonymised, or no active membership |
 
-**PKCE.** The browser gets a one-time `code` back from Supabase rather than a token in the
-URL (`flowType: 'pkce'`).
+The reasons are listed in `SignInError` (`backend/app/api/v1/auth.py`) and
+`SIGN_IN_ERRORS` (`frontend/src/pages/SignInPage.tsx`); keep the two in sync.
 
+**Permissions still come from the server.** `/me` returns the union of
+(resource, action, scope) grants across the person's active memberships,
+keeping the widest scope when two grants overlap (spec section 3.2).
+For example, LCVP oGV plus Team Leader BD gives `membership:edit` at
+`function`, not `team`. `resolve_permissions` reads the
+`BASELINE_PERMISSION_MATRIX` in `backend/app/core/permissions.py`.
+An ended or future membership grants nothing. Frontend visibility is only
+a convenience; feature endpoints enforce permissions again on the backend.
+
+**Why sessions are stored in PostgreSQL.** `user_session` contains a
+SHA-256 hash of the session token, an optional person ID, a pending OAuth
+state hash, creation and expiry timestamps, and an optional revocation
+timestamp. Raw tokens and state values are never stored. A pending OAuth
+session lasts one hour. After successful sign-in, the token is rotated and
+the authenticated session lasts 12 hours by default, without sliding
+renewal. The `__session` cookie uses HttpOnly, SameSite=Lax and Path=/.
+It is also `Secure` whenever `APP_BASE_URL` is `https://` (every
+deployment). Locally over plain http it isn't, because Safari drops
+`Secure` cookies on `http://localhost`.
+
+**Old sessions are cleaned up automatically.** Every `GET /auth/login`
+first deletes expired and revoked rows (`purge_stale_sessions`), and a
+failed callback deletes its own pending row. No scheduled job is needed,
+and the table can't grow without bound even if someone calls the login URL
+in a loop: pending rows expire after an hour. `expires_at` is indexed for
+this. When the anonymisation workflow is built (Phase 2), it must also
+delete the person's `user_session` rows.
+
+**Each successful sign-in is written once to `audit_log`.** The callback
+uses `record_audit` with action `auth.sign_in`, the local person ID and
+`{"allocated": true}`. The identity link, authenticated session and audit
+entry are committed together. Calling `/me` repeatedly does not create
+more sign-in entries. The audit entry contains no email, OAuth code or
+session token.
+
+**Refused sign-ins are audited too, but only after EXPA has confirmed who the
+person is** (spec open question 17). A refused sign-in writes `auth.sign_in`
+with `{"allocated": false, "reason": ...}`:
+
+| `reason` | `resource_id` / `actor_person_id` |
+|---|---|
+| `domain` (email outside `ALLOWED_EMAIL_DOMAINS`) | none |
+| `not_allocated`, no person row or anonymised | none |
+| `not_allocated`, person exists but has no active membership | the person's id |
+
+The email is never stored. An anonymised person's id is left out so the record
+gains no new linked activity. Cancelled, expired-state and EXPA-error failures
+are **not** audited: anyone can trigger those in a loop without an EXPA
+account, and the audit log is permanent and append-only, so auditing them
+would let a script fill it.
+
+**Origin validation protects write requests.** Browsers attach cookies
+automatically, even to requests another website triggers, so a
+cookie-based session needs CSRF protection. For methods other than GET,
+HEAD and OPTIONS, the backend requires an `Origin` header matching either
+`FRONTEND_ORIGIN` or `APP_BASE_URL`, compared without a trailing slash and
+case-insensitively. A mismatch or missing Origin gets 403. Locally these
+are two different origins (Vite on :5173, the API on :8000). Deployed,
+Firebase serves both from one domain, so they are the same.
+
+**No backend sign-in stub.** API authentication requires a valid local
+session cookie. The backend no longer trusts Supabase JWTs or the old
+`X-Actor-Email` development header. `get_current_actor` still resolves the
+person's active memberships and enforces the existing permission model.
+
+**Session expiry and logout.** Expired or revoked sessions get 401.
+`POST /api/v1/auth/logout` revokes the current session and clears both
+authentication cookies. The frontend's redirect and session-expiry UI
+behaviour will be updated in DEV-83.
+
+## EXPA backend setup
+
+The backend reads these settings from `backend/app/config.py`. The
+repository-root `.env.example` lists the corresponding environment
+variables.
+
+| Variable | Purpose |
+|---|---|
+| `EXPA_AUTH_URL` | EXPA OAuth service URL |
+| `EXPA_GRAPHQL_URL` | GIS GraphQL endpoint |
+| `EXPA_CLIENT_ID` | Registered OAuth application ID |
+| `EXPA_CLIENT_SECRET` | OAuth client secret, backend only |
+| `APP_BASE_URL` | Public URL of the API, used to build the callback URL; `https://` turns on Secure cookies |
+| `SESSION_TTL_HOURS` | Fixed session lifetime, default 12 |
+| `ALLOWED_EMAIL_DOMAINS` | Exact permitted email domains |
+| `FRONTEND_ORIGIN` | Where the browser app runs: allowed by CORS and the Origin check, and where sign-in redirects to |
+
+The callback URL is built as:
+
+`{APP_BASE_URL}/api/v1/auth/callback`
+
+**Register the exact HTTPS callback URL with EXPA.** The local HTTP
+defaults are useful for mocked tests, but they are not a working live
+EXPA OAuth setup. The real OAuth client ID and secret are still pending
+the AIESEC developer application and deployment configuration (DEV-77).
+
+Keep secrets in the organisation's approved secret store. Do not put
+`EXPA_CLIENT_SECRET` in a `VITE_` variable, a commit, a PR description
+or a frontend bundle.
+
+The intended deployment uses Firebase Hosting with `/api` routed to
+Cloud Run. That routing and `APP_BASE_URL` must agree before real
+browser sign-in can be tested.
+
+## Checking the backend
+
+| Try | Expect |
+|---|---|
+| `GET /api/v1/me` without a cookie | 401 |
+| `GET /api/v1/auth/login` without EXPA credentials | 503 |
+| OAuth callback with missing or wrong state | 302 to `/sign-in?error=expired` |
+| OAuth callback with a disallowed email domain | 302 to `/sign-in?error=domain` |
+| OAuth callback for a person with no active membership | 302 to `/sign-in?error=not_allocated`, no session |
+| Valid OAuth callback for an allocated person | Session cookie and 302 to `FRONTEND_ORIGIN` |
+| Reuse a consumed OAuth state | 302 to `/sign-in?error=expired` |
+| Request with an expired or revoked session | 401 |
+| POST with a missing or incorrect Origin | 403 |
+| Logout with a valid session | Session revoked; cookie cleared |
+
+Backend tests stub the EXPA provider, so they do not require live
+credentials. Run `uv run pytest -q` from `backend/`. A passing suite
+does not prove that EXPA's live OAuth endpoints, GIS URL, registered
+redirect or deployed proxy routing have been configured correctly.
+
+> **Frontend transition (DEV-83).** The sections below describe the
+> current Supabase-based frontend and are retained until DEV-83 changes
+> that code. They are not instructions for authenticating against the
+> DEV-82 backend: the backend now accepts only its own EXPA-derived
+> `__session` cookie. Real frontend sign-in will not work end-to-end
+> until DEV-83 is completed.
+>
 ## Mock mode vs real sign-in
 
 `VITE_AUTH_MODE` (frontend) picks how sign-in works:
@@ -173,7 +328,7 @@ frontend is wired to the backend endpoints. Where that mock data can't load for 
 user, the page shows an error message rather than spinning. The mock lives only in the browser and the backend trusts only
 Supabase-signed tokens, so mock mode can never grant real access (spec §2A.3).
 
-## One-time setup (Supabase + Google)
+## One-time setup (Supabase + Google; legacy frontend, DEV-83)
 
 Do this **once per Supabase project** (local/dev, and later production). Use the
 **AIESEC Australia-owned** Google and Supabase accounts, never a personal one

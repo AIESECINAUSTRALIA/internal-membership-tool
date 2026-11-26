@@ -27,7 +27,6 @@ from app.api.deps import (
     get_current_actor,
     get_current_user,
     get_db,
-    get_token_verifier,
 )
 from app.core.auth import AuthenticatedUser
 from app.main import app
@@ -66,10 +65,10 @@ def seeded(db_session: Session) -> Seeded:
     inactive_lc = make_lc(db_session, name="test_ref_closed")
     inactive_lc.active = False
     term = make_term(db_session, name="test_ref_term")
-    ogv = make_function(db_session, key="test_ref_ogv", label="oGV")
+    ogv = make_function(db_session, key="test_ref_ogv", label="Test oGV")
     bnm = make_function(db_session, key="test_ref_bnm", label="BnM")
     leader_person = make_person(db_session, full_name="Jane Leader", email="test_ref_tl@aiesec.net")
-    position = make_position(db_session, key="test_ref_tl", label="Team Leader", rank=3)
+    position = make_position(db_session, key="test_ref_tl", label="Test Team Leader", rank=3)
     leader = make_membership(
         db_session, person=leader_person, lc=lc, position=position, term=term, function=ogv
     )
@@ -113,15 +112,6 @@ def test_options_reject_a_signed_in_account_that_is_not_one_of_our_people(
 
 def test_options_reject_anonymous(client: TestClient) -> None:
     del app.dependency_overrides[get_current_actor]
-
-    def no_verification_expected() -> object:
-        class Verifier:
-            def verify(self, token: str) -> AuthenticatedUser:
-                raise AssertionError("Verifier should not run without credentials")
-
-        return Verifier()
-
-    app.dependency_overrides[get_token_verifier] = no_verification_expected
 
     assert client.get(URL).status_code == 401
 
