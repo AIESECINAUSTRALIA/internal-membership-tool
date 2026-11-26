@@ -22,6 +22,8 @@ from app.models.org import LC, Function, LCType, Position, Term
 from app.models.person import Person
 from app.repositories.kpi import record_kpi, set_home_chart_default
 from tests.helpers import (
+    YEAR_AGO,
+    YEAR_AHEAD,
     make_function,
     make_kpi_attribute,
     make_lc,
@@ -29,8 +31,6 @@ from tests.helpers import (
     make_person,
     make_team,
     make_term,
-    YEAR_AHEAD,
-    YEAR_AGO,
 )
 
 URL = "/api/v1/data/chart"
@@ -266,7 +266,10 @@ def test_no_records_returns_empty_rows_and_points(data_api: DataApiFixture) -> N
 
 
 def test_start_after_end_is_bad_request(data_api: DataApiFixture) -> None:
-    res = data_api.client.get(URL, params={"scope": "team", "start": "2026-12-31", "end": "2026-01-01"})
+    res = data_api.client.get(
+        URL, 
+        params={"scope": "team", "start": "2026-12-31", "end": "2026-01-01"}
+    )
 
     assert res.status_code == 400
 
@@ -275,4 +278,7 @@ def test_unallocated_person_is_forbidden(data_api: DataApiFixture, db_session: S
     nobody = make_person(db_session, email="test-data-nobody@aiesec.net")
     _act_as(CurrentActor(person=nobody, active_memberships=[], acting_membership=None))
 
-    assert data_api.client.get(URL, params={"scope": "team", "start": START, "end": END}).status_code == 403
+    assert data_api.client.get(
+        URL, 
+        params={"scope": "team", "start": START, "end": END}
+    ).status_code == 403
