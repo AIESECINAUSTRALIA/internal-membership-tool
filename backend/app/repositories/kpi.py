@@ -17,11 +17,12 @@ from typing import Any
 from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.permissions import HomeChartScope
+from app.core.permissions import DataChartScope, HomeChartScope
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.kpi import HomeChartDefault, KpiRecord, KpiSource
-from app.models.membership import Membership, TeamMember
-from app.models.org import Function
+from app.models.membership import Membership, Team, TeamMember
+from app.models.org import LC, Function
+from app.models.person import Person
 from app.repositories.attribute import AttributeValidationError, validate_and_coerce
 
 
@@ -246,7 +247,7 @@ def monthly_totals(
     session: Session,
     *,
     attribute_id: int,
-    scope: HomeChartScope,
+    scope: DataChartScope,
     start: date,
     end: date,
     lc_id: int | None = None,
@@ -293,4 +294,101 @@ def monthly_totals(
             if function_id is None
             else Membership.function_id == function_id,
         )
+    elif scope == "lc":
+        if lc_id is None:
+            return {}
+        stmt = stmt.join(Membership, Membership.id == KpiRecord.membership_id).where(
+            Membership.lc_id == lc_id,
+        )
+    elif scope == "all" and lc_id is not None:
+        # 'all' with an optional LC filter: MC viewers can narrow to one LC.
+        stmt = stmt.join(Membership, Membership.id == KpiRecord.membership_id).where(
+            Membership.lc_id == lc_id,
+        )
     return {row[0]: float(row[1]) for row in session.execute(stmt).all()}
+
+
+# ---------------------------------------------------------------------------
+# Data page summary rollups (spec §2A.7, §6)
+# ---------------------------------------------------------------------------
+# Each function returns (label, total) pairs for the rows of the summary table.
+# All use period OVERLAP (record overlaps [period_start, period_end]) to match
+# the convention established by sum_by_function above.
+
+
+def sum_by_team_member(
+    session: Session,
+    *,
+    attribute_id: int,
+    team_id: int,
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, float]]:
+    """(person_full_name, total) for each member of a team — 'team' scope summary."""
+    stmt = (
+        select(Person.full_name, func.sum(KpiRecord.value_number))
+        .join(Membership, Membership.id == KpiRecord.membership_id)
+        .join(Person, Person.id == Membership.person_id)
+        .where(
+            KpiRecord.attribute_id == attribute_id,
+            KpiRecord.period_start <= period_end,
+            KpiRecord.period_end >= period_start,
+            KpiRecord.team_id == team_id,
+        )
+        .group_by(Person.id, Person.full_name)
+        .order_by(Person.full_name)
+    )
+    return [(row[0], float(row[1])) for row in session.execute(stmt).all()]
+
+
+def sum_by_team_in_function(
+    session: Session,
+    *,
+    attribute_id: int,
+    lc_id: int,
+    function_id: int,
+    period_start: date,
+    period_end: date,
+) -> list[tuple[str, float]]:
+    """(team_name, total) for each team in a function — 'function' scope summary."""
+    stmt = (
+        select(Team.name, func.sum(KpiRecord.value_number))
+        .join(Membership, Membership.id == KpiRecord.membership_id)
+        .outerjoin(Team, Team.id == KpiRecord.team_id)
+        .where(
+            KpiRecord.attribute_id == attribute_id,
+            KpiRecord.period_start <= period_end,
+            KpiRecord.period_end >= period_start,
+            Membership.lc_id == lc_id,
+            Membership.function_id == function_id,
+        )
+        .group_by(Team.id, Team.name)
+        .order_by(Team.name)
+    )
+    return [(row[0] or "No team", float(row[1])) for row in session.execute(stmt).all()]
+
+
+def sum_by_lc(
+    session: Session,
+    *,
+    attribute_id: int,
+    period_start: date,
+    period_end: date,
+    filter_lc_id: int | None = None,
+) -> list[tuple[str, float]]:
+    """(lc_name, total) per LC — 'all' scope summary. Optionally filtered to one LC."""
+    stmt = (
+        select(LC.name, func.sum(KpiRecord.value_number))
+        .join(Membership, Membership.id == KpiRecord.membership_id)
+        .join(LC, LC.id == Membership.lc_id)
+        .where(
+            KpiRecord.attribute_id == attribute_id,
+            KpiRecord.period_start <= period_end,
+            KpiRecord.period_end >= period_start,
+        )
+        .group_by(LC.id, LC.name)
+        .order_by(LC.name)
+    )
+    if filter_lc_id is not None:
+        stmt = stmt.where(Membership.lc_id == filter_lc_id)
+    return [(row[0], float(row[1])) for row in session.execute(stmt).all()]

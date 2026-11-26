@@ -50,6 +50,8 @@ import type {
   CreateLcInput,
   CustomField,
   CustomFieldValue,
+  DataChart,
+  DataQuery,
   HomeChart,
   IsoDate,
   Lc,
@@ -537,6 +539,19 @@ export function createMockApi(options: MockApiOptions = {}): Api {
         kpi: null,
         availableKpis: [],
         title: `Monthly activity, ${where}`,
+        period: 'monthly',
+        points: [],
+      }
+    },
+
+    async getDataChart(query: DataQuery): Promise<DataChart> {
+      await wait()
+      requireActor()
+      return {
+        scope: query.scope,
+        kpi: null,
+        availableKpis: [],
+        summaryRows: [],
         period: 'monthly',
         points: [],
       }

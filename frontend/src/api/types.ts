@@ -375,6 +375,33 @@ export interface AdminPersonQuery {
 }
 
 // ---------------------------------------------------------------------------
+// Data page (§2A.7, §6)
+// ---------------------------------------------------------------------------
+
+export interface DataSummaryRow {
+  label: string
+  value: number
+}
+
+export interface DataChart {
+  scope: Exclude<Scope, 'own'>
+  kpi: KpiRef | null
+  availableKpis: KpiRef[]
+  summaryRows: DataSummaryRow[]
+  period: 'monthly'
+  points: { month: string; value: number }[]
+}
+
+export interface DataQuery {
+  scope: Exclude<Scope, 'own'>
+  startDate: IsoDate
+  endDate: IsoDate
+  /** MC viewers can narrow 'all' scope to one LC. String id from the frontend. */
+  lcId?: string | null
+  kpiKey?: string
+}
+
+// ---------------------------------------------------------------------------
 // The one interface every page uses
 // ---------------------------------------------------------------------------
 
@@ -415,6 +442,10 @@ export interface Api {
   // Homepage
   /** `kpiKey` picks a KPI; omit it for the function default. Never changes whose data. */
   getHomeChart(kpiKey?: string): Promise<HomeChart>
+
+  // Data page (§2A.7, §6)
+  /** Summary rows + monthly chart points for the chosen scope and date range. */
+  getDataChart(query: DataQuery): Promise<DataChart>
 
   // Admin console: LCs (§2A.2, §1.5). Each change needs `manage` on `lc`.
   /** Every LC including inactive ones; `getReferenceData()` lists active LCs only. */
