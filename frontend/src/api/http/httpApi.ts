@@ -31,6 +31,8 @@
 
 import type {
   ActionResult,
+  DataChart,
+  DataQuery,
   Lc,
   ReferenceData,
   Team,
@@ -389,6 +391,22 @@ export function createHttpApi(options: HttpApiOptions): Api {
     /** Throws `HttpError` when the save is refused; a 422's `detail` says which field. */
     async updateMyCustomFields(values: Record<string, CustomFieldValue>): Promise<CustomField[]> {
       return http.patch<CustomField[]>('/api/v1/me/custom-fields', values)
+    },
+
+    // -------------------------------------------------------------------
+    // Data page — REAL backend (Spec §2A.7, §6)
+    // -------------------------------------------------------------------
+
+    async getDataChart(query: DataQuery): Promise<DataChart> {
+      const params = new URLSearchParams({
+        scope: query.scope,
+        start: query.startDate,
+        end: query.endDate,
+      })
+      if (query.kpiKey) params.set('kpi', query.kpiKey)
+      const lcId = toDbId(query.lcId ?? null)
+      if (lcId !== null) params.set('lc_id', String(lcId))
+      return http.get<DataChart>(`/api/v1/data/chart?${params.toString()}`)
     },
   }
 }

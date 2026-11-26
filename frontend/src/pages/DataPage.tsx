@@ -1,11 +1,25 @@
-import { Box, Button, MenuItem, Paper, Stack, TextField, Typography } from '@mui/material'
+import {
+  Box,
+  Button,
+  MenuItem,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography,
+} from '@mui/material'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import BarChartOutlined from '@mui/icons-material/BarChartOutlined'
 import dayjs, { type Dayjs } from 'dayjs'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
+import { useApi } from '../api/ApiContext'
 import { useReferenceData } from '../api/ReferenceDataContext'
-import type { Lc, Scope } from '../api/types'
+import type { DataChart, Lc, Scope } from '../api/types'
 import { useAuth } from '../auth/authContext'
 import { availableDataScopes, widestScope } from '../auth/permissions'
 import { EmptyChartState, EmptyDataTable } from '../components/EmptyState'
@@ -20,10 +34,10 @@ const ALL_LCS = 'all'
 /**
  * Data (spec §2A.7, §6): summaries and graphs, with a custom date range and a
  * data-analytics report generator SEPARATE from the official NAMs / SONA / MTR
- * reports (§7). The KPI catalog is still a spec TODO (§4.3), so the summary and graph
- * are shown in their intended shape but empty ("No data exists", spec §2A).
+ * reports (§7).
  */
 export function DataPage() {
+  const api = useApi()
   const { me } = useAuth()
   const { reference } = useReferenceData()
   const [scope, setScope] = useState<Scope>('team')
@@ -31,17 +45,49 @@ export function DataPage() {
   const [startDate, setStartDate] = useState<Dayjs | null>(dayjs().subtract(30, 'day'))
   const [endDate, setEndDate] = useState<Dayjs | null>(dayjs())
   const [reportOpen, setReportOpen] = useState(false)
+  const [chart, setChart] = useState<DataChart | null>(null)
+
+  // Derived from me.permissions — safe to compute before the early-return because
+  // `availableDataScopes` / `widestScope` accept an empty array when me is null.
+  const permissions = me?.permissions ?? []
+  const scopeOptions = availableDataScopes(permissions)
+  // The route guard requires at least 'team' scope to reach this page, so scopeOptions
+  // is never empty here in practice; `?? 'team'` only satisfies the array-index type.
+  const activeScope: Exclude<Scope, 'own'> = (
+    scopeOptions.includes(scope) ? scope : (scopeOptions[0] ?? 'team')
+  ) as Exclude<Scope, 'own'>
+  // MC-wide viewers may narrow an LC-level summary to one LC (spec §12 #15 is still open
+  // on who else may do this).
+  const canPickLc = widestScope(permissions, 'analytics_report', 'view') === 'all'
+  const showLcPicker = canPickLc && activeScope === 'lc' && reference
+
+  useEffect(() => {
+    // Guard: no call without a signed-in user and a valid date range.
+    if (!me || !startDate || !endDate) return
+    let cancelled = false
+    api
+      .getDataChart({
+        scope: activeScope,
+        startDate: startDate.format('YYYY-MM-DD'),
+        endDate: endDate.format('YYYY-MM-DD'),
+        lcId: lcId !== ALL_LCS ? lcId : null,
+      })
+      .then(
+        (result) => {
+          if (!cancelled) setChart(result)
+        },
+        () => {
+          if (!cancelled) setChart(null)
+        },
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [api, me, activeScope, startDate, endDate, lcId])
 
   if (!me) return null
 
-  const scopeOptions = availableDataScopes(me.permissions)
-  // The route guard requires at least 'team' scope to reach this page, so scopeOptions
-  // is never empty here in practice; `?? 'team'` only satisfies the array-index type.
-  const activeScope = scopeOptions.includes(scope) ? scope : (scopeOptions[0] ?? 'team')
-  // MC-wide viewers may narrow an LC-level summary to one LC (spec §12 #15 is still open
-  // on who else may do this).
-  const canPickLc = widestScope(me.permissions, 'analytics_report', 'view') === 'all'
-  const showLcPicker = canPickLc && activeScope === 'lc' && reference
+  const summaryLabel = GROUP_LABEL[activeScope]
 
   return (
     <Stack spacing={3}>
@@ -92,12 +138,33 @@ export function DataPage() {
 
       <Paper variant="outlined" sx={{ p: 3 }} component="section" aria-labelledby="data-summary-title">
         <Typography id="data-summary-title" variant="h2" component="h2" sx={{ mb: 2 }}>
-          Summary
+          Summary{chart?.kpi ? `: ${chart.kpi.label}${chart.kpi.unit ? ` (${chart.kpi.unit})` : ''}` : ''}
         </Typography>
-        <EmptyDataTable label="Summary" columns={[GROUP_LABEL[activeScope], 'Value']} />
+        {chart && chart.summaryRows.length > 0 ? (
+          <Box sx={{ overflowX: 'auto' }}>
+            <Table size="small" aria-label="Summary">
+              <TableHead>
+                <TableRow>
+                  <TableCell>{summaryLabel}</TableCell>
+                  <TableCell align="right">Value</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {chart.summaryRows.map((row) => (
+                  <TableRow key={row.label}>
+                    <TableCell>{row.label}</TableCell>
+                    <TableCell align="right">{row.value}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Box>
+        ) : (
+          <EmptyDataTable label="Summary" columns={[summaryLabel, 'Value']} />
+        )}
         <Typography color="text.secondary" sx={{ mt: 1, maxWidth: '65ch' }}>
-          Rolled up by {GROUP_LABEL[activeScope].toLowerCase()}, computed from records at request time — never a stored
-          total (spec §6). Waiting on the KPI catalog (spec §4.3).
+          Rolled up by {summaryLabel.toLowerCase()}, computed from records at request time — never a stored total
+          (spec §6).
         </Typography>
       </Paper>
 
@@ -108,7 +175,7 @@ export function DataPage() {
         <Typography color="text.secondary" sx={{ mt: 0.5 }}>
           {SCOPE_LABELS[activeScope]}, over the chosen date range.
         </Typography>
-        <EmptyChartState />
+        {(!chart || chart.points.length === 0) && <EmptyChartState />}
       </Paper>
     </Stack>
   )

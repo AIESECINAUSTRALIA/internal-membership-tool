@@ -51,6 +51,7 @@ def position_level(position_key: str) -> Literal["lc", "mc"]:
 
 
 HomeChartScope = Literal["team", "function", "all"]
+DataChartScope = Literal["team", "function", "lc", "all"]
 
 
 def home_chart_scope(position_key: str) -> HomeChartScope:

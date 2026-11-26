@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     attributes,
     auth,
+    data,
     home,
     lcs,
     me,
@@ -22,6 +23,7 @@ api_router.include_router(lcs.router)
 api_router.include_router(positions_functions.router)
 api_router.include_router(reference.router)
 api_router.include_router(home.router)
+api_router.include_router(data.router)
 api_router.include_router(attributes.router)
 api_router.include_router(me.router)
 api_router.include_router(people.router)

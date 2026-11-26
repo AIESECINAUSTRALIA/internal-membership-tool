@@ -85,7 +85,8 @@ def get_home_chart(
             scope=scope,
             start=start,
             end=end,
-            lc_id=acting.lc_id,
+            # 'all' scope must not be narrowed to the actor's own LC — it shows every LC.
+            lc_id=acting.lc_id if scope != "all" else None,
             function_id=acting.function_id,
             team_id=context.team_id,
         )
