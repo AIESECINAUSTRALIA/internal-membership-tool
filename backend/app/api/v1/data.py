@@ -79,15 +79,12 @@ def get_data_chart(
 
     # Resolve the KPI to plot (same logic as the homepage chart).
     try:
-        attribute = resolve_home_chart_kpi(
-            db, function_id=acting_ctx.function_id, kpi_key=kpi
-        )
+        attribute = resolve_home_chart_kpi(db, function_id=acting_ctx.function_id, kpi_key=kpi)
     except AttributeValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     available_kpis = [
-        _kpi_ref(a)
-        for a in list_home_chart_kpis(db, function_id=acting_ctx.function_id)
+        _kpi_ref(a) for a in list_home_chart_kpis(db, function_id=acting_ctx.function_id)
     ]
 
     if attribute is None:

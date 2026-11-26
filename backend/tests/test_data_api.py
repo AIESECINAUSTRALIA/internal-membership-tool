@@ -91,20 +91,10 @@ def data_api(db_session: Session) -> Generator[DataApiFixture, None, None]:
     person_a = make_person(db_session, email="test-data-a@aiesec.net")
     person_b = make_person(db_session, email="test-data-b@aiesec.net")
     mem_a = make_membership(
-        db_session, 
-        person=person_a, 
-        lc=lc, 
-        position=member_pos, 
-        term=term, 
-        function=function
+        db_session, person=person_a, lc=lc, position=member_pos, term=term, function=function
     )
     mem_b = make_membership(
-        db_session, 
-        person=person_b, 
-        lc=lc, 
-        position=member_pos, 
-        term=term, 
-        function=function
+        db_session, person=person_b, lc=lc, position=member_pos, term=term, function=function
     )
     db_session.add(TeamMember(team_id=team.id, membership_id=mem_a.id, start_date=YEAR_AGO))
     db_session.add(TeamMember(team_id=team.id, membership_id=mem_b.id, start_date=YEAR_AGO))
@@ -113,12 +103,7 @@ def data_api(db_session: Session) -> Generator[DataApiFixture, None, None]:
     # Default viewer: a TL in the same team
     tl_person = make_person(db_session, email="test-data-tl@aiesec.net")
     tl_mem = make_membership(
-        db_session, 
-        person=tl_person, 
-        lc=lc, 
-        position=tl_pos, 
-        term=term, 
-        function=function
+        db_session, person=tl_person, lc=lc, position=tl_pos, term=term, function=function
     )
     db_session.add(TeamMember(team_id=team.id, membership_id=tl_mem.id, start_date=YEAR_AGO))
     db_session.flush()
@@ -181,12 +166,12 @@ def test_function_scope_aggregates_by_team(data_api: DataApiFixture, db_session:
     lcvp_pos = _get_or_create_position(db_session, key="lcvp", rank=3)
     lcvp_person = make_person(db_session, email="test-data-lcvp@aiesec.net")
     lcvp_mem = make_membership(
-        db_session, 
-        person=lcvp_person, 
-        lc=data_api.lc, 
-        position=lcvp_pos, 
-        term=data_api.term, 
-        function=data_api.function
+        db_session,
+        person=lcvp_person,
+        lc=data_api.lc,
+        position=lcvp_pos,
+        term=data_api.term,
+        function=data_api.function,
     )
     _act_as(_actor(lcvp_person, lcvp_mem))
 
@@ -204,11 +189,7 @@ def test_lc_scope_aggregates_by_function(data_api: DataApiFixture, db_session: S
     lcp_pos = _get_or_create_position(db_session, key="lcp", rank=4)
     lcp_person = make_person(db_session, email="test-data-lcp@aiesec.net")
     lcp_mem = make_membership(
-        db_session, 
-        person=lcp_person, 
-        lc=data_api.lc, 
-        position=lcp_pos, 
-        term=data_api.term
+        db_session, person=lcp_person, lc=data_api.lc, position=lcp_pos, term=data_api.term
     )
     _act_as(_actor(lcp_person, lcp_mem))
 
@@ -228,12 +209,12 @@ def test_all_scope_aggregates_by_lc(data_api: DataApiFixture, db_session: Sessio
     mc_lc = make_lc(db_session, name="test-data-mc", lc_type=LCType.MC)
     mcvp_person = make_person(db_session, email="test-data-mcvp@aiesec.net")
     mcvp_mem = make_membership(
-        db_session, 
-        person=mcvp_person, 
-        lc=mc_lc, 
-        position=mcvp_pos, 
-        term=data_api.term, 
-        function=data_api.function
+        db_session,
+        person=mcvp_person,
+        lc=mc_lc,
+        position=mcvp_pos,
+        term=data_api.term,
+        function=data_api.function,
     )
     _act_as(_actor(mcvp_person, mcvp_mem))
 
@@ -267,8 +248,7 @@ def test_no_records_returns_empty_rows_and_points(data_api: DataApiFixture) -> N
 
 def test_start_after_end_is_bad_request(data_api: DataApiFixture) -> None:
     res = data_api.client.get(
-        URL, 
-        params={"scope": "team", "start": "2026-12-31", "end": "2026-01-01"}
+        URL, params={"scope": "team", "start": "2026-12-31", "end": "2026-01-01"}
     )
 
     assert res.status_code == 400
@@ -278,7 +258,7 @@ def test_unallocated_person_is_forbidden(data_api: DataApiFixture, db_session: S
     nobody = make_person(db_session, email="test-data-nobody@aiesec.net")
     _act_as(CurrentActor(person=nobody, active_memberships=[], acting_membership=None))
 
-    assert data_api.client.get(
-        URL, 
-        params={"scope": "team", "start": START, "end": END}
-    ).status_code == 403
+    assert (
+        data_api.client.get(URL, params={"scope": "team", "start": START, "end": END}).status_code
+        == 403
+    )
