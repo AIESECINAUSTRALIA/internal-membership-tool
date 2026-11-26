@@ -29,8 +29,8 @@ from tests.helpers import (
     make_person,
     make_team,
     make_term,
-    YEAR_AGO,
     YEAR_AHEAD,
+    YEAR_AGO,
 )
 
 URL = "/api/v1/data/chart"
@@ -80,25 +80,46 @@ def data_api(db_session: Session) -> Generator[DataApiFixture, None, None]:
     term = make_term(db_session, name="test-data-term", start=YEAR_AGO, end=YEAR_AHEAD)
     function = make_function(db_session, key="test_data_fn", label="Test Data Fn")
     team = make_team(db_session, lc=lc, function=function, term=term, name="Test Data Team")
-    # Shared KPI (function_id=None) so both function-scoped and function-less (LCP) actors can use it.
+    # Shared KPI (function_id=None) so both function-scoped & function-less (LCP) actors can use it
     kpi = make_kpi_attribute(db_session, key="test_data_kpi", label="Test KPI")
     set_home_chart_default(db_session, function_id=function.id, attribute=kpi)
 
     member_pos = _get_or_create_position(db_session, key="member", rank=1)
     tl_pos = _get_or_create_position(db_session, key="team_leader", rank=2)
-    lcvp_pos = _get_or_create_position(db_session, key="lcvp", rank=3)
+    # lcvp_pos = _get_or_create_position(db_session, key="lcvp", rank=3)
 
     person_a = make_person(db_session, email="test-data-a@aiesec.net")
     person_b = make_person(db_session, email="test-data-b@aiesec.net")
-    mem_a = make_membership(db_session, person=person_a, lc=lc, position=member_pos, term=term, function=function)
-    mem_b = make_membership(db_session, person=person_b, lc=lc, position=member_pos, term=term, function=function)
+    mem_a = make_membership(
+        db_session, 
+        person=person_a, 
+        lc=lc, 
+        position=member_pos, 
+        term=term, 
+        function=function
+    )
+    mem_b = make_membership(
+        db_session, 
+        person=person_b, 
+        lc=lc, 
+        position=member_pos, 
+        term=term, 
+        function=function
+    )
     db_session.add(TeamMember(team_id=team.id, membership_id=mem_a.id, start_date=YEAR_AGO))
     db_session.add(TeamMember(team_id=team.id, membership_id=mem_b.id, start_date=YEAR_AGO))
     db_session.flush()
 
     # Default viewer: a TL in the same team
     tl_person = make_person(db_session, email="test-data-tl@aiesec.net")
-    tl_mem = make_membership(db_session, person=tl_person, lc=lc, position=tl_pos, term=term, function=function)
+    tl_mem = make_membership(
+        db_session, 
+        person=tl_person, 
+        lc=lc, 
+        position=tl_pos, 
+        term=term, 
+        function=function
+    )
     db_session.add(TeamMember(team_id=team.id, membership_id=tl_mem.id, start_date=YEAR_AGO))
     db_session.flush()
 
@@ -160,7 +181,12 @@ def test_function_scope_aggregates_by_team(data_api: DataApiFixture, db_session:
     lcvp_pos = _get_or_create_position(db_session, key="lcvp", rank=3)
     lcvp_person = make_person(db_session, email="test-data-lcvp@aiesec.net")
     lcvp_mem = make_membership(
-        db_session, person=lcvp_person, lc=data_api.lc, position=lcvp_pos, term=data_api.term, function=data_api.function
+        db_session, 
+        person=lcvp_person, 
+        lc=data_api.lc, 
+        position=lcvp_pos, 
+        term=data_api.term, 
+        function=data_api.function
     )
     _act_as(_actor(lcvp_person, lcvp_mem))
 
@@ -177,7 +203,13 @@ def test_function_scope_aggregates_by_team(data_api: DataApiFixture, db_session:
 def test_lc_scope_aggregates_by_function(data_api: DataApiFixture, db_session: Session) -> None:
     lcp_pos = _get_or_create_position(db_session, key="lcp", rank=4)
     lcp_person = make_person(db_session, email="test-data-lcp@aiesec.net")
-    lcp_mem = make_membership(db_session, person=lcp_person, lc=data_api.lc, position=lcp_pos, term=data_api.term)
+    lcp_mem = make_membership(
+        db_session, 
+        person=lcp_person, 
+        lc=data_api.lc, 
+        position=lcp_pos, 
+        term=data_api.term
+    )
     _act_as(_actor(lcp_person, lcp_mem))
 
     _log(db_session, data_api.team_member_a, data_api.kpi, 6.0, date(2026, 5, 1))
@@ -196,7 +228,12 @@ def test_all_scope_aggregates_by_lc(data_api: DataApiFixture, db_session: Sessio
     mc_lc = make_lc(db_session, name="test-data-mc", lc_type=LCType.MC)
     mcvp_person = make_person(db_session, email="test-data-mcvp@aiesec.net")
     mcvp_mem = make_membership(
-        db_session, person=mcvp_person, lc=mc_lc, position=mcvp_pos, term=data_api.term, function=data_api.function
+        db_session, 
+        person=mcvp_person, 
+        lc=mc_lc, 
+        position=mcvp_pos, 
+        term=data_api.term, 
+        function=data_api.function
     )
     _act_as(_actor(mcvp_person, mcvp_mem))
 

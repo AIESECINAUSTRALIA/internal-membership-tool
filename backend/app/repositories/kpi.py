@@ -17,7 +17,7 @@ from typing import Any
 from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.permissions import DataChartScope, HomeChartScope
+from app.core.permissions import DataChartScope
 from app.models.attribute import Attribute, AttributeAppliesTo, AttributeDataType
 from app.models.kpi import HomeChartDefault, KpiRecord, KpiSource
 from app.models.membership import Membership, Team, TeamMember
